@@ -30,6 +30,20 @@ else
     printf '%swarning%s no .env found; relying on the ambient environment.\n' "$GREY" "$RESET"
 fi
 
+# The Kiro CLI installs to ~/.local/bin, which is often absent from a
+# non-login shell's PATH. Add it so the default 'kiro-cli' still resolves.
+if [[ -d "$HOME/.local/bin" && ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
+RESOLVED_CLI="${KIRO_CLI_BIN:-kiro-cli}"
+if ! command -v "$RESOLVED_CLI" >/dev/null 2>&1 && [[ ! -x "$RESOLVED_CLI" ]]; then
+    printf '%swarning%s kiro-cli not found at %s%s%s.\n' \
+        "$RED" "$RESET" "$BOLD" "$RESOLVED_CLI" "$RESET"
+    printf '          Requests will fail until you set KIRO_CLI_BIN in .env.\n'
+    printf '          Re-run %s./setup.sh%s to detect it automatically.\n\n' "$BOLD" "$RESET"
+fi
+
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8000}"
 

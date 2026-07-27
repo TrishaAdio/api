@@ -71,6 +71,7 @@ Set in `.env`:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `KIRO_CLI_BIN` | detected | Absolute path to `kiro-cli`. Set by `setup.sh` |
 | `KIRO_API_KEY` | — | Kiro CLI credential |
 | `BRIDGE_API_KEY` | generated | Bearer token clients must send |
 | `KIRO_DEFAULT_MODEL` | `auto` | Fallback for unknown model ids |

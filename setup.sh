@@ -405,6 +405,10 @@ if [[ "$WRITE_ENV" == "1" ]]; then
     cat > "$ENV_FILE" <<EOF
 # Written by setup.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+# Absolute path to the Kiro CLI. Recorded here because the server does not
+# inherit the PATH of an interactive login shell (e.g. ~/.local/bin).
+KIRO_CLI_BIN=${CLI_PATH:-kiro-cli}
+
 # Kiro CLI credential (app.kiro.dev -> API Keys)
 KIRO_API_KEY=${KEY_IN}
 
@@ -422,6 +426,30 @@ KIRO_TRUST_TOOLS=
 EOF
     chmod 600 "$ENV_FILE"
     ok ".env written $(printf '%smode 600%s' "$GREY" "$RESET")"
+fi
+
+cli_usable() {
+    local c="${1:-}"
+    [[ -n "$c" ]] || return 1
+    command -v "$c" >/dev/null 2>&1 && return 0
+    [[ -x "$c" ]] && return 0
+    return 1
+}
+
+# Repair a kept .env that has no KIRO_CLI_BIN, or one pointing at a binary the
+# server cannot resolve. Without this the API answers every request with
+# "Kiro CLI not found".
+if [[ -n "$CLI_PATH" && -f "$ENV_FILE" ]]; then
+    CURRENT_CLI="$(sed -n 's/^KIRO_CLI_BIN=//p' "$ENV_FILE" | tail -n 1)"
+    if ! cli_usable "$CURRENT_CLI"; then
+        if grep -q '^KIRO_CLI_BIN=' "$ENV_FILE"; then
+            sed -i.bak "s|^KIRO_CLI_BIN=.*|KIRO_CLI_BIN=${CLI_PATH}|" "$ENV_FILE"
+            rm -f "$ENV_FILE.bak"
+        else
+            printf 'KIRO_CLI_BIN=%s\n' "$CLI_PATH" >> "$ENV_FILE"
+        fi
+        ok "recorded kiro-cli path in .env $(printf '%s(%s)%s' "$GREY" "$CLI_PATH" "$RESET")"
+    fi
 fi
 
 # shellcheck disable=SC1090
@@ -447,8 +475,11 @@ else
     fi
 
     if [[ -n "$CLI_PATH" ]]; then
+        # Deliberately no KIRO_CLI_BIN override here: this must exercise the
+        # exact configuration run.sh will use, or a .env missing the CLI path
+        # passes the self-test and then fails at runtime.
         if run_step "querying real models via kiro-cli" \
-            env KIRO_CLI_BIN="$CLI_PATH" "$VENV_PY" -c '
+            "$VENV_PY" -c '
 import asyncio, sys
 from kiro_openai.backend import backend
 async def main():
