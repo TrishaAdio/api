@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""Stub that mimics the documented `kiro-cli chat` headless contract.
+
+Used to exercise the bridge without burning real Kiro credits. It reproduces
+the parts the bridge depends on: --help flag discovery, --list-models --format
+json, --no-interactive requiring a prompt argument, stdin piping, and ANSI/
+spinner noise on stdout.
+"""
+import argparse
+import json
+import sys
+
+CHAT_HELP = """\
+Usage: kiro-cli chat [OPTIONS] [INPUT]
+
+Options:
+      --no-interactive          Print the first response to STDOUT
+      --trust-all-tools         Auto-approve all tool use
+      --trust-tools=<TOOLS>     Auto-approve specific tool categories
+      --agent <AGENT>           Agent config to use
+      --model <MODEL>           Model to use
+      --effort <EFFORT>         Reasoning effort [low, medium, high, xhigh, max]
+      --wrap <WRAP>             Line wrapping [always, never, auto]
+      --list-models             List available models
+      --format <FORMAT>         Output format for --list-models
+  -h, --help                    Print help
+"""
+
+MODELS = [
+    {"id": "auto", "name": "Auto"},
+    {"id": "claude-sonnet-4.5", "name": "Claude Sonnet 4.5"},
+    {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol"},
+]
+
+
+def main() -> int:
+    argv = sys.argv[1:]
+    if not argv or argv[0] != "chat":
+        sys.stderr.write("stub only implements `chat`\n")
+        return 1
+    argv = argv[1:]
+
+    if "--help" in argv or "-h" in argv:
+        sys.stdout.write(CHAT_HELP)
+        return 0
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--no-interactive", action="store_true")
+    parser.add_argument("--list-models", action="store_true")
+    parser.add_argument("--format")
+    parser.add_argument("--model")
+    parser.add_argument("--effort")
+    parser.add_argument("--wrap")
+    parser.add_argument("--agent")
+    parser.add_argument("--trust-tools")
+    parser.add_argument("--trust-all-tools", action="store_true")
+    parser.add_argument("prompt", nargs="*")
+    args = parser.parse_args(argv)
+
+    if args.list_models:
+        if args.format == "json":
+            sys.stdout.write(json.dumps(MODELS))
+        else:
+            sys.stdout.write("\n".join(m["id"] for m in MODELS))
+        return 0
+
+    prompt = " ".join(args.prompt).strip()
+    if args.no_interactive and not prompt:
+        sys.stderr.write("error: --no-interactive requires a prompt argument\n")
+        return 1
+
+    piped = ""
+    if not sys.stdin.isatty():
+        piped = sys.stdin.read()
+
+    # Emit spinner + ANSI noise the way the real TUI does, to prove the
+    # bridge's cleanup logic strips it.
+    sys.stdout.write("\u280b\r\u2819\r")
+    sys.stdout.write("\x1b[38;5;13m")
+
+    sys.stdout.write("MODEL={0} EFFORT={1} WRAP={2} TRUST={3}\n".format(
+        args.model, args.effort, args.wrap, args.trust_tools))
+    sys.stdout.write("ARGV_PROMPT_LEN={0}\n".format(len(prompt)))
+    sys.stdout.write("STDIN_LEN={0}\n".format(len(piped)))
+
+    body = piped if piped else prompt
+    marker = "SAW_TRANSCRIPT" if "<conversation>" in body else "SAW_PLAIN"
+    sys.stdout.write("{0}\n".format(marker))
+    sys.stdout.write("INSTRUCTIONS={0}\n".format("yes" if "<instructions>" in body else "no"))
+    sys.stdout.write("ECHO_TAIL={0}\n".format(body.strip()[-80:].replace("\n", "|")))
+    sys.stdout.write("\x1b[0m")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
