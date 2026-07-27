@@ -67,6 +67,8 @@ async def healthz():
         "status": "ok" if backend.ready else "degraded",
         "cli": settings.cli_bin,
         "models": backend.models(),
+        "model_selection": backend.supports_model_flag,
+        "default_model": settings.default_model,
         "trust_tools": settings.trust_tools,
         "error": error,
     }
@@ -102,11 +104,27 @@ async def chat_completions(body: ChatCompletionRequest):
     completion_id = "chatcmpl-{0}".format(uuid.uuid4().hex)
     created = int(time.time())
 
+    # OpenAI's schema has nowhere to report that a requested model was not
+    # honoured, so say so in a header instead of failing silently.
+    headers = {}
+    if body.model:
+        if not backend.supports_model_flag:
+            headers["X-Kiro-Warning"] = (
+                "this kiro-cli build cannot select a model per request; "
+                "served with '{0}'".format(model)
+            )
+        elif model != body.model and body.model.split("/")[-1] != model:
+            headers["X-Kiro-Warning"] = "unknown model '{0}'; served with '{1}'".format(
+                body.model, model
+            )
+
     if body.stream:
+        stream_headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+        stream_headers.update(headers)
         return StreamingResponse(
             _stream(completion_id, created, model, prompt, body.reasoning_effort),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            headers=stream_headers,
         )
 
     try:
@@ -117,26 +135,29 @@ async def chat_completions(body: ChatCompletionRequest):
     prompt_tokens = estimate_tokens(prompt)
     completion_tokens = estimate_tokens(text)
 
-    return {
-        "id": completion_id,
-        "object": "chat.completion",
-        "created": created,
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": text},
-                "logprobs": None,
-                "finish_reason": "stop",
-            }
-        ],
-        # Estimated: the headless CLI does not report token counts.
-        "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
+    return JSONResponse(
+        headers=headers,
+        content={
+            "id": completion_id,
+            "object": "chat.completion",
+            "created": created,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": text},
+                    "logprobs": None,
+                    "finish_reason": "stop",
+                }
+            ],
+            # Estimated: the headless CLI does not report token counts.
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
         },
-    }
+    )
 
 
 # --------------------------------------------------------------------- streaming

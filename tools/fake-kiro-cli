@@ -8,7 +8,10 @@ spinner noise on stdout.
 """
 import argparse
 import json
+import os
 import sys
+
+MODEL_HELP_LINE = "      --model <MODEL>           Model to use\n"
 
 CHAT_HELP = """\
 Usage: kiro-cli chat [OPTIONS] [INPUT]
@@ -18,13 +21,19 @@ Options:
       --trust-all-tools         Auto-approve all tool use
       --trust-tools=<TOOLS>     Auto-approve specific tool categories
       --agent <AGENT>           Agent config to use
-      --model <MODEL>           Model to use
+{model_line}\
       --effort <EFFORT>         Reasoning effort [low, medium, high, xhigh, max]
       --wrap <WRAP>             Line wrapping [always, never, auto]
       --list-models             List available models
       --format <FORMAT>         Output format for --list-models
   -h, --help                    Print help
 """
+
+
+def chat_help() -> str:
+    # FAKE_NO_MODEL_FLAG simulates a CLI build without per-request model choice.
+    line = "" if os.environ.get("FAKE_NO_MODEL_FLAG") else MODEL_HELP_LINE
+    return CHAT_HELP.format(model_line=line)
 
 MODELS = [
     {"id": "auto", "name": "Auto"},
@@ -41,7 +50,7 @@ def main() -> int:
     argv = argv[1:]
 
     if "--help" in argv or "-h" in argv:
-        sys.stdout.write(CHAT_HELP)
+        sys.stdout.write(chat_help())
         return 0
 
     parser = argparse.ArgumentParser(add_help=False)
@@ -77,6 +86,10 @@ def main() -> int:
     # bridge's cleanup logic strips it.
     sys.stdout.write("\u280b\r\u2819\r")
     sys.stdout.write("\x1b[38;5;13m")
+
+    # The real CLI prefixes its answer with "> "; reproduce it so the bridge's
+    # marker stripping is exercised.
+    sys.stdout.write("> ")
 
     sys.stdout.write("MODEL={0} EFFORT={1} WRAP={2} TRUST={3}\n".format(
         args.model, args.effort, args.wrap, args.trust_tools))

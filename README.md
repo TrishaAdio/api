@@ -84,6 +84,42 @@ Set in `.env`:
 `KIRO_TRUST_TOOLS` is empty by default, so the bridge behaves like a plain chat
 model. Setting it lets the agent act on `KIRO_BRIDGE_WORKDIR`.
 
+## Choosing a model
+
+List what your account actually offers:
+
+```bash
+curl -s http://127.0.0.1:8000/v1/models | python3 -m json.tool
+```
+
+Then name it in the request:
+
+```bash
+curl -s -H "Authorization: Bearer $BRIDGE_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"model":"claude-sonnet-4.5","messages":[{"role":"user","content":"hi"}]}' \
+  http://127.0.0.1:8000/v1/chat/completions
+```
+
+Per-request selection requires a CLI build whose `chat` subcommand accepts
+`--model`. Check with:
+
+```bash
+curl -s http://127.0.0.1:8000/healthz | python3 -c 'import json,sys; print(json.load(sys.stdin)["model_selection"])'
+```
+
+If that is `false`, the CLI cannot switch models per invocation. Requests still
+succeed but are served by whatever `kiro-cli` is configured to use, the response
+reports that effective model rather than the one you asked for, and an
+`X-Kiro-Warning` header explains why. Set a global default instead:
+
+```bash
+kiro-cli settings chat.defaultModel claude-sonnet-4.5
+```
+
+Unknown model ids fall back to `KIRO_DEFAULT_MODEL` and also set
+`X-Kiro-Warning`. Provider-prefixed ids such as `kiro/claude-sonnet-4.5` are
+accepted.
+
 ## Limitations
 
 - **Streaming is replayed, not live.** `--no-interactive` returns the whole
@@ -98,8 +134,9 @@ model. Setting it lets the agent act on `KIRO_BRIDGE_WORKDIR`.
 ## Tests
 
 ```bash
-.venv/bin/python tools/verify.py      # OpenAI wire contract, against a stub CLI
-.venv/bin/python tools/verify_sdk.py  # same, driven by the real openai SDK
+.venv/bin/python tools/verify.py                # OpenAI wire contract
+.venv/bin/python tools/verify_sdk.py            # same, via the real openai SDK
+.venv/bin/python tools/verify_no_model_flag.py  # CLI without --model support
 ```
 
 `tools/fake-kiro-cli` stands in for the real CLI so tests consume no credits.

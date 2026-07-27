@@ -129,6 +129,24 @@ with TestClient(app) as client:
     check("reassembled stream is non-empty", "SAW_PLAIN" in joined, joined[:120])
     check("stream ids stable", len({p["id"] for p in parsed}) == 1)
 
+    print("\n== CLI '> ' answer marker ==")
+    r = client.post("/v1/chat/completions", headers=AUTH, json={
+        "model": "auto", "messages": [{"role": "user", "content": "marker"}]})
+    content = r.json()["choices"][0]["message"]["content"]
+    check("leading '> ' stripped", not content.startswith(">"), repr(content[:30]))
+    check("body preserved after stripping", content.startswith("MODEL="), repr(content[:30]))
+
+    print("\n== model selection is reported honestly ==")
+    check("healthz advertises model_selection",
+          client.get("/healthz").json()["model_selection"] is True)
+    r = client.post("/v1/chat/completions", headers=AUTH, json={
+        "model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]})
+    check("unknown model warns via header",
+          "unknown model" in r.headers.get("X-Kiro-Warning", ""), dict(r.headers))
+    r = client.post("/v1/chat/completions", headers=AUTH, json={
+        "model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hi"}]})
+    check("honoured model emits no warning", "X-Kiro-Warning" not in r.headers, dict(r.headers))
+
     print("\n== error propagation ==")
     check("empty messages -> 400",
           client.post("/v1/chat/completions", headers=AUTH, json={"messages": []}).status_code == 400)

@@ -33,6 +33,19 @@ def _clean(raw: str) -> str:
     return "\n".join(kept).strip()
 
 
+def _strip_response_marker(text: str) -> str:
+    """Remove the '> ' marker the CLI prints ahead of its answer.
+
+    Only the very start of the output is touched, so genuine markdown
+    blockquotes later in the response survive intact.
+    """
+    if text.startswith("> "):
+        return text[2:].lstrip("\n")
+    if text.startswith(">\n"):
+        return text[2:].lstrip("\n")
+    return text
+
+
 def _child_env() -> dict:
     env = dict(os.environ)
     env["NO_COLOR"] = "1"
@@ -99,8 +112,21 @@ class KiroBackend:
     def models(self) -> List[str]:
         return list(self._models) if self._models else list(_FALLBACK_MODELS)
 
+    @property
+    def supports_model_flag(self) -> bool:
+        """Whether this CLI build can select a model per invocation."""
+        return "--model" in self._chat_flags
+
     def resolve_model(self, requested: Optional[str]) -> str:
-        """Map a requested model id onto something this CLI actually offers."""
+        """Map a requested model id onto what will actually serve the request.
+
+        When the CLI cannot select a model per call, the request's model is not
+        honoured, so the configured default is returned rather than echoing back
+        an id that was ignored.
+        """
+        if not self.supports_model_flag:
+            return settings.default_model
+
         available = self.models()
         if requested and requested in available:
             return requested
@@ -130,7 +156,7 @@ class KiroBackend:
             raise KiroError("kiro-cli exited {0}: {1}".format(code, detail[:2000]), exit_code=code)
         if not body:
             raise KiroError("kiro-cli produced no output. stderr: {0}".format(_clean(err)[:2000]))
-        return body
+        return _strip_response_marker(body)
 
     # ---------------------------------------------------------------- internals
 
