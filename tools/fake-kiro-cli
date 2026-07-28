@@ -36,10 +36,23 @@ def chat_help() -> str:
     return CHAT_HELP.format(model_line=line)
 
 MODELS = [
-    {"id": "auto", "name": "Auto"},
-    {"id": "claude-sonnet-4.5", "name": "Claude Sonnet 4.5"},
-    {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol"},
+    {"id": "auto", "cost": "1.00", "desc": "Models chosen by task for optimal usage"},
+    {"id": "claude-opus-5", "cost": "2.20", "desc": "Experimental preview of Claude Opus 5"},
+    {"id": "claude-sonnet-5", "cost": "1.30", "desc": "Claude Sonnet 5 model with 1M context window"},
+    {"id": "claude-sonnet-4.6", "cost": "1.30", "desc": "Claude Sonnet 4.6 model with 1M context window"},
+    {"id": "gpt-5.6-sol", "cost": "2.40", "desc": "Experimental preview of OpenAI GPT 5.6 Sol"},
+    {"id": "qwen3-coder-next", "cost": "0.05", "desc": "Experimental preview of Qwen3 Coder Next"},
 ]
+
+# Byte-for-byte layout of the real CLI's table, so the text parser is tested
+# against the format actually observed in the wild.
+def models_table() -> str:
+    lines = ["Available models (* = default):", ""]
+    for entry in MODELS:
+        marker = "*" if entry["id"] == "auto" else " "
+        lines.append("{0} {1:<20} {2}x credits      {3}".format(
+            marker, entry["id"], entry["cost"], entry["desc"]))
+    return "\n".join(lines) + "\n"
 
 
 def main() -> int:
@@ -67,10 +80,12 @@ def main() -> int:
     args = parser.parse_args(argv)
 
     if args.list_models:
-        if args.format == "json":
-            sys.stdout.write(json.dumps(MODELS))
+        # FAKE_NO_JSON_FORMAT reproduces builds that ignore --format and always
+        # print the human-readable table.
+        if args.format == "json" and not os.environ.get("FAKE_NO_JSON_FORMAT"):
+            sys.stdout.write(json.dumps([{"id": m["id"]} for m in MODELS]))
         else:
-            sys.stdout.write("\n".join(m["id"] for m in MODELS))
+            sys.stdout.write(models_table())
         return 0
 
     prompt = " ".join(args.prompt).strip()

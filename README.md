@@ -100,25 +100,30 @@ curl -s -H "Authorization: Bearer $BRIDGE_API_KEY" -H 'Content-Type: application
   http://127.0.0.1:8000/v1/chat/completions
 ```
 
-Per-request selection requires a CLI build whose `chat` subcommand accepts
+The model you name is the model that answers. It is never silently swapped:
+
+- The `model` field is passed to the CLI as `--model` and echoed back in the
+  response, plus an `X-Kiro-Model` response header.
+- An unknown id returns **404** listing the available models, rather than
+  quietly serving a different one.
+- Omitting `model` uses `KIRO_DEFAULT_MODEL`.
+- Provider-prefixed ids such as `kiro/claude-sonnet-5` are accepted.
+
+Per-request selection needs a CLI build whose `chat` subcommand accepts
 `--model`. Check with:
 
 ```bash
 curl -s http://127.0.0.1:8000/healthz | python3 -c 'import json,sys; print(json.load(sys.stdin)["model_selection"])'
 ```
 
-If that is `false`, the CLI cannot switch models per invocation. Requests still
-succeed but are served by whatever `kiro-cli` is configured to use, the response
-reports that effective model rather than the one you asked for, and an
-`X-Kiro-Warning` header explains why. Set a global default instead:
+If that is `false`, naming a non-default model returns 404 with an explanation
+instead of pretending it worked. Set a default globally in that case:
 
 ```bash
-kiro-cli settings chat.defaultModel claude-sonnet-4.5
+kiro-cli settings chat.defaultModel claude-sonnet-5
+# or, in .env:
+KIRO_DEFAULT_MODEL=claude-sonnet-5
 ```
-
-Unknown model ids fall back to `KIRO_DEFAULT_MODEL` and also set
-`X-Kiro-Warning`. Provider-prefixed ids such as `kiro/claude-sonnet-4.5` are
-accepted.
 
 ## Limitations
 
@@ -134,9 +139,11 @@ accepted.
 ## Tests
 
 ```bash
-.venv/bin/python tools/verify.py                # OpenAI wire contract
-.venv/bin/python tools/verify_sdk.py            # same, via the real openai SDK
-.venv/bin/python tools/verify_no_model_flag.py  # CLI without --model support
+.venv/bin/python tools/verify.py                  # OpenAI wire contract
+.venv/bin/python tools/verify_sdk.py              # same, via the real openai SDK
+.venv/bin/python tools/verify_models.py           # per-request model selection
+TEXT_ONLY=1 .venv/bin/python tools/verify_models.py   # discovery from the text table
+.venv/bin/python tools/verify_no_model_flag.py    # CLI without --model support
 ```
 
 `tools/fake-kiro-cli` stands in for the real CLI so tests consume no credits.

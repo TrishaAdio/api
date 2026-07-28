@@ -33,21 +33,27 @@ with TestClient(app) as client:
     health = client.get("/healthz").json()
     check("model_selection reported false", health["model_selection"] is False, health)
 
+    # Naming a non-default model must fail loudly rather than be served by a
+    # different model behind the client's back.
     resp = client.post("/v1/chat/completions", headers=AUTH, json={
-        "model": "claude-sonnet-4.5",
+        "model": "claude-sonnet-5",
         "messages": [{"role": "user", "content": "hi"}],
     })
-    data = resp.json()
-    content = data["choices"][0]["message"]["content"]
+    check("non-default model rejected, not substituted", resp.status_code == 404, resp.status_code)
+    message = resp.json()["error"]["message"]
+    check("error explains the missing --model flag", "no 'chat --model' flag" in message, message)
+    check("error suggests a remedy", "KIRO_DEFAULT_MODEL" in message, message)
 
-    check("warning header explains the limitation",
-          "cannot select a model" in resp.headers.get("X-Kiro-Warning", ""),
-          dict(resp.headers))
-    check("response does NOT echo the unhonoured model",
-          data["model"] != "claude-sonnet-4.5", data["model"])
-    check("response echoes the effective default", data["model"] == "auto", data["model"])
+    # The configured default still works, since it needs no flag.
+    resp = client.post("/v1/chat/completions", headers=AUTH, json={
+        "model": "auto", "messages": [{"role": "user", "content": "hi"}]})
+    content = resp.json()["choices"][0]["message"]["content"]
+    check("default model still served", resp.status_code == 200, resp.status_code)
     check("--model never passed to the CLI", "MODEL=None" in content, content)
-    check("request still succeeds", resp.status_code == 200)
+
+    resp = client.post("/v1/chat/completions", headers=AUTH, json={
+        "messages": [{"role": "user", "content": "hi"}]})
+    check("omitted model still works", resp.status_code == 200, resp.status_code)
 
 print("\n" + "=" * 46)
 if failures:

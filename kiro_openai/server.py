@@ -9,7 +9,7 @@ from typing import AsyncIterator, Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from .backend import KiroError, backend
+from .backend import KiroError, ModelNotAvailable, backend
 from .config import settings
 from .prompt import build_prompt, estimate_tokens
 from .schemas import ChatCompletionRequest, Model, ModelList
@@ -100,23 +100,15 @@ async def chat_completions(body: ChatCompletionRequest):
     if not prompt.strip():
         return _openai_error(400, "'messages' contained no usable text content")
 
-    model = backend.resolve_model(body.model)
+    # A model named in the request is honoured exactly or rejected outright.
+    try:
+        model = backend.resolve_model(body.model)
+    except ModelNotAvailable as exc:
+        return _openai_error(404, str(exc), "invalid_request_error")
+
     completion_id = "chatcmpl-{0}".format(uuid.uuid4().hex)
     created = int(time.time())
-
-    # OpenAI's schema has nowhere to report that a requested model was not
-    # honoured, so say so in a header instead of failing silently.
-    headers = {}
-    if body.model:
-        if not backend.supports_model_flag:
-            headers["X-Kiro-Warning"] = (
-                "this kiro-cli build cannot select a model per request; "
-                "served with '{0}'".format(model)
-            )
-        elif model != body.model and body.model.split("/")[-1] != model:
-            headers["X-Kiro-Warning"] = "unknown model '{0}'; served with '{1}'".format(
-                body.model, model
-            )
+    headers = {"X-Kiro-Model": model}
 
     if body.stream:
         stream_headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}

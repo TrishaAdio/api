@@ -25,6 +25,14 @@ class KiroError(RuntimeError):
         self.exit_code = exit_code
 
 
+class ModelNotAvailable(KiroError):
+    """The requested model cannot serve the request.
+
+    Raised instead of quietly substituting a different model, so a client that
+    names a model always either gets that model or an explicit error.
+    """
+
+
 def _clean(raw: str) -> str:
     """Strip ANSI escapes and residual spinner-only lines from CLI output."""
     text = _ANSI_RE.sub("", raw)
@@ -93,19 +101,41 @@ class KiroBackend:
         return set(re.findall(r"--[a-z][a-z0-9-]+", _clean(out + "\n" + err)))
 
     async def _probe_models(self) -> List[str]:
+        """Discover model ids, preferring JSON but tolerating the text table.
+
+        `--format json` is not honoured on every build, and when it is not the
+        CLI prints its human-readable table instead. Parsing only JSON meant
+        model discovery silently collapsed to the fallback list.
+        """
+        ids: List[str] = []
+
         try:
             code, out, _ = await self._exec(
                 [settings.cli_bin, "chat", "--list-models", "--format", "json"], timeout=60
             )
         except KiroError:
-            return list(_FALLBACK_MODELS)
-        if code != 0:
+            code, out = 1, ""
+
+        if code == 0:
+            cleaned = _clean(out)
+            ids = _parse_model_ids(cleaned) or _parse_model_table(cleaned)
+
+        if not ids:
+            try:
+                code, out, _ = await self._exec(
+                    [settings.cli_bin, "chat", "--list-models"], timeout=60
+                )
+            except KiroError:
+                code, out = 1, ""
+            if code == 0:
+                ids = _parse_model_table(_clean(out))
+
+        if not ids:
             return list(_FALLBACK_MODELS)
 
-        ids = _parse_model_ids(_clean(out))
         if settings.default_model not in ids:
             ids.insert(0, settings.default_model)
-        return ids or list(_FALLBACK_MODELS)
+        return ids
 
     # ----------------------------------------------------------------- public
 
@@ -118,24 +148,36 @@ class KiroBackend:
         return "--model" in self._chat_flags
 
     def resolve_model(self, requested: Optional[str]) -> str:
-        """Map a requested model id onto what will actually serve the request.
+        """Resolve the model that will serve this request.
 
-        When the CLI cannot select a model per call, the request's model is not
-        honoured, so the configured default is returned rather than echoing back
-        an id that was ignored.
+        A model named in the request is honoured exactly or the request is
+        rejected. Substituting a different model would let a client believe it
+        was talking to one model while another answered.
         """
-        if not self.supports_model_flag:
+        if not requested:
             return settings.default_model
 
         available = self.models()
-        if requested and requested in available:
-            return requested
-        if requested:
-            # Tolerate provider-prefixed ids like "kiro/claude-sonnet-4.5".
-            tail = requested.split("/")[-1]
-            if tail in available:
-                return tail
-        return settings.default_model
+        candidate = requested
+        if candidate not in available:
+            # Tolerate provider-prefixed ids like "kiro/claude-sonnet-5".
+            candidate = requested.split("/")[-1]
+
+        if candidate not in available:
+            raise ModelNotAvailable(
+                "The model '{0}' does not exist. Available models: {1}".format(
+                    requested, ", ".join(available)
+                )
+            )
+
+        if not self.supports_model_flag and candidate != settings.default_model:
+            raise ModelNotAvailable(
+                "This kiro-cli build has no 'chat --model' flag, so '{0}' cannot be "
+                "selected per request. Either set KIRO_DEFAULT_MODEL={0} in .env and "
+                "restart, or run 'kiro-cli settings chat.defaultModel {0}'.".format(candidate)
+            )
+
+        return candidate
 
     async def complete(
         self,
@@ -233,6 +275,33 @@ class KiroBackend:
             out.decode("utf-8", "replace"),
             err.decode("utf-8", "replace"),
         )
+
+
+_TABLE_ROW_RE = re.compile(
+    r"^\s*(?P<default>\*)?\s*(?P<id>[A-Za-z][\w.\-]*)\s+\d+(?:\.\d+)?x\s+credits\b"
+)
+
+
+def _parse_model_table(raw: str) -> List[str]:
+    """Extract model ids from the CLI's human-readable --list-models table.
+
+        Available models (* = default):
+
+        * auto              1.00x credits      Models chosen by task...
+          claude-sonnet-5   1.30x credits      Claude Sonnet 5 model...
+
+    Requiring the 'Nx credits' column keeps the header and any trailing prose
+    from being mistaken for model ids.
+    """
+    ids: List[str] = []
+    for line in raw.splitlines():
+        match = _TABLE_ROW_RE.match(line)
+        if not match:
+            continue
+        model_id = match.group("id")
+        if model_id not in ids:
+            ids.append(model_id)
+    return ids
 
 
 def _parse_model_ids(raw: str) -> List[str]:
