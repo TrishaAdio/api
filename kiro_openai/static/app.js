@@ -68,31 +68,59 @@ const md = (src) => RioMD.render(src);
 
 const icon = (id) => `<svg><use href="#${id}"/></svg>`;
 
-/* Reasoning arrives before the answer and is collapsed by default: it is
-   context, not the result. */
-function showThinking(turn, text) {
-  if (!turn || !text) return;
+/* Reasoning streams in before the answer. It is shown open while the model is
+   still thinking, then collapsed once the answer starts, since by then it is
+   context rather than the result. */
+function thinkPanel(turn) {
+  if (!turn) return null;
   const host = $('.think', turn);
-  if (!host) return;
-  host.hidden = false;
-  host.innerHTML =
-    `<button type="button" class="think-toggle">
-       <svg class="think-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-         <path d="M9 6l6 6-6 6"/>
-       </svg>
-       <span>Thinking</span><em>${wordCount(text)} words</em>
-     </button>
-     <div class="think-body" hidden>${md(text)}</div>`;
+  if (!host) return null;
 
-  const toggle = $('.think-toggle', host);
-  const panel = $('.think-body', host);
-  toggle.onclick = () => {
-    const open = panel.hidden;
-    panel.hidden = !open;
-    host.classList.toggle('open', open);
-    $('span', toggle).textContent = open ? 'Hide thinking' : 'Thinking';
-  };
+  if (!host.dataset.ready) {
+    host.dataset.ready = '1';
+    host.hidden = false;
+    host.innerHTML =
+      `<button type="button" class="think-toggle">
+         <svg class="think-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+           <path d="M9 6l6 6-6 6"/>
+         </svg>
+         <span>Thinking</span><em></em>
+       </button>
+       <div class="think-body"></div>`;
+
+    const toggle = $('.think-toggle', host);
+    const body = $('.think-body', host);
+    toggle.onclick = () => {
+      const open = body.hidden;
+      body.hidden = !open;
+      host.classList.toggle('open', open);
+      $('span', toggle).textContent = open ? 'Hide thinking' : 'Thinking';
+    };
+  }
+  return host;
+}
+
+function updateThinking(turn, text, live) {
+  const host = thinkPanel(turn);
+  if (!host || !text) return;
+  const body = $('.think-body', host);
+  body.hidden = false;
+  host.classList.add('open', 'live');
+  body.innerHTML = md(text) + (live ? '<span class="caret"></span>' : '');
+  $('.think-toggle em', host).textContent = `${wordCount(text)} words`;
+  $('.think-toggle span', host).textContent = live ? 'Thinking' : 'Hide thinking';
+  host.classList.toggle('live', !!live);
+}
+
+function collapseThinking(turn) {
+  const host = turn && $('.think', turn);
+  if (!host || !host.dataset.ready) return;
+  const body = $('.think-body', host);
+  body.innerHTML = body.innerHTML.replace(/<span class="caret"><\/span>$/, '');
+  body.hidden = true;
+  host.classList.remove('open', 'live');
+  $('.think-toggle span', host).textContent = 'Thinking';
 }
 
 const wordCount = (s) => String(s).trim().split(/\s+/).filter(Boolean).length;
@@ -271,9 +299,25 @@ async function send(text) {
   $('#send').disabled = true;
   $('#turn-meta').textContent = '';
 
+  const turnEl = body.closest('.turn');
   let answer = '';
+  let thoughts = '';
+  let collapsed = false;
   let frame = 0;
+  let thoughtFrame = 0;
   let dirty = false;
+
+  // Reasoning repaints on the same one-frame budget as the answer.
+  const paintThoughts = () => {
+    if (thoughtFrame) return;
+    thoughtFrame = requestAnimationFrame(() => {
+      thoughtFrame = 0;
+      // A frame queued before the answer started must not reopen the panel.
+      if (collapsed) return;
+      updateThinking(turnEl, thoughts, true);
+      bottom();
+    });
+  };
 
   // Re-parsing markdown on every 3-character delta would burn the main thread
   // on long answers, so repaint at most once per frame.
@@ -316,13 +360,29 @@ async function send(text) {
         let evt;
         try { evt = JSON.parse(line); } catch { continue; }
 
-        if (evt.type === 'thinking') {
-          showThinking(body.closest('.turn'), evt.text);
+        if (evt.type === 'thinking_delta') {
+          if (!thoughts) body.innerHTML = '';
+          thoughts += evt.text;
+          paintThoughts();
+        } else if (evt.type === 'thinking') {
+          // CLI backend hands over the whole reasoning block at once.
+          thoughts = evt.text;
+          updateThinking(turnEl, thoughts, false);
+          collapseThinking(turnEl);
         } else if (evt.type === 'delta') {
+          if (thoughts && !collapsed) {
+            collapsed = true;
+            cancelAnimationFrame(thoughtFrame);
+            thoughtFrame = 0;
+            updateThinking(turnEl, thoughts, false);
+            collapseThinking(turnEl);
+          }
           answer += evt.text;
           paint();
         } else if (evt.type === 'done') {
           cancelAnimationFrame(frame);
+          cancelAnimationFrame(thoughtFrame);
+          if (thoughts && !collapsed) collapseThinking(turnEl);
           body.innerHTML = md(answer);
           const tail = document.createElement('div');
           tail.className = 'tail';

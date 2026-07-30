@@ -7,6 +7,7 @@ import re
 import shutil
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
+from . import acp
 from .config import settings
 
 _ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
@@ -243,6 +244,40 @@ class KiroBackend:
             )
 
         return candidate
+
+    async def stream_reply(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        effort: Optional[str] = None,
+    ):
+        """Yield ("thought" | "text", chunk) as the model produces them.
+
+        ACP streams genuinely and preserves markdown source. The CLI backend
+        can only produce the finished answer, so it yields one chunk of each
+        kind — the same shape, without the live behaviour.
+        """
+        if settings.use_acp:
+            emitted = False
+            try:
+                async with self._semaphore:
+                    async for kind, chunk in acp.stream_turn(
+                        prompt, model=model, timeout=settings.request_timeout
+                    ):
+                        emitted = True
+                        yield (kind, chunk)
+                return
+            except acp.AcpError as exc:
+                # Falling back after partial output would duplicate the answer,
+                # so only an failure before the first chunk is recoverable.
+                if emitted or not settings.acp_fallback:
+                    raise KiroError("ACP backend failed: {0}".format(exc))
+
+        text = await self.complete(prompt, model=model, effort=effort)
+        thinking, answer = split_thinking(text)
+        if thinking:
+            yield ("thought", thinking)
+        yield ("text", answer)
 
     async def complete(
         self,

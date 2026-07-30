@@ -353,8 +353,23 @@ async def web_chat(body: WebChatRequest, request: Request, ip: str = Depends(req
         started = time.perf_counter()
         yield _event({"type": "start", "model": model})
 
+        chunks: List[str] = []
         try:
-            text = await backend.complete(prompt, model=model, effort=body.effort)
+            # Chunks are forwarded the moment they arrive, so reasoning appears
+            # in the console while the model is still working.
+            async for kind, piece in backend.stream_reply(
+                prompt, model=model, effort=body.effort
+            ):
+                if kind == "thought":
+                    yield _event({"type": "thinking_delta", "text": piece})
+                else:
+                    chunks.append(piece)
+                    # The CLI backend yields the answer in one piece; slicing
+                    # keeps the console rendering progressively either way.
+                    step = max(1, settings.stream_chunk_size)
+                    for at in range(0, len(piece), step):
+                        yield _event({"type": "delta", "text": piece[at : at + step]})
+                        await asyncio.sleep(0)
         except KiroError as exc:
             elapsed = int((time.perf_counter() - started) * 1000)
             await usage.record(ip=ip, model=model, latency_ms=elapsed, status=502,
@@ -363,17 +378,7 @@ async def web_chat(body: WebChatRequest, request: Request, ip: str = Depends(req
             return
 
         elapsed = int((time.perf_counter() - started) * 1000)
-
-        thinking, text = split_thinking(text)
-        if thinking:
-            yield _event({"type": "thinking", "text": thinking})
-
-        # The CLI returns the answer whole, so this is paced replay. It keeps
-        # the UI responsive; it does not improve time-to-first-token.
-        step = 3
-        for index in range(0, len(text), step):
-            yield _event({"type": "delta", "text": text[index : index + step]})
-            await asyncio.sleep(0)
+        text = "".join(chunks)
 
         prompt_tokens = estimate_tokens(prompt)
         completion_tokens = estimate_tokens(text)

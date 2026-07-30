@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import time
@@ -12,7 +11,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import usage, webapp
-from .backend import KiroError, ModelNotAvailable, backend, split_thinking
+from .backend import KiroError, ModelNotAvailable, backend
 from .config import settings
 from .prompt import build_prompt, estimate_tokens
 from .schemas import ChatCompletionRequest, Model, ModelList
@@ -102,6 +101,8 @@ async def healthz():
     return {
         "status": "ok" if backend.ready else "degraded",
         "cli": settings.cli_bin,
+        "backend": settings.backend,
+        "streaming": "live" if settings.use_acp else "replayed",
         "models": backend.models(),
         "model_selection": backend.supports_model_flag,
         "default_model": settings.default_model,
@@ -166,15 +167,18 @@ async def chat_completions(
         )
 
     try:
-        text = await backend.complete(prompt, model=model, effort=body.reasoning_effort)
+        collected = []
+        async for kind, piece in backend.stream_reply(
+            prompt, model=model, effort=body.reasoning_effort
+        ):
+            if kind == "text":
+                collected.append(piece)
+        text = "".join(collected)
     except KiroError as exc:
         await usage.record(ip=ip, model=model, status=502,
                            latency_ms=int((time.perf_counter() - started) * 1000),
                            user_agent=agent, error=str(exc), key_id=key_id)
         return _openai_error(502, str(exc), "server_error")
-
-    # OpenAI's schema has no field for reasoning, so only the answer is returned.
-    _thinking, text = split_thinking(text)
 
     prompt_tokens = estimate_tokens(prompt)
     completion_tokens = estimate_tokens(text)
@@ -247,8 +251,24 @@ async def _stream(
     response is ready. Switch to the ACP backend for genuine token streaming.
     """
     started = time.perf_counter()
+    yield _chunk(completion_id, created, model, {"role": "assistant", "content": ""}, None)
+
+    parts = []
     try:
-        text = await backend.complete(prompt, model=model, effort=effort)
+        # Forwarded as they arrive, so this is real streaming when the ACP
+        # backend is active. Reasoning chunks are dropped: OpenAI's schema has
+        # no field for them.
+        async for kind, piece in backend.stream_reply(prompt, model=model, effort=effort):
+            if kind != "text" or not piece:
+                continue
+            parts.append(piece)
+            # ACP chunks are already fine-grained; the CLI backend hands over
+            # the whole answer at once, so slice to keep deltas incremental
+            # for clients that render as they read.
+            size = max(1, settings.stream_chunk_size)
+            for at in range(0, len(piece), size):
+                yield _chunk(completion_id, created, model,
+                             {"content": piece[at : at + size]}, None)
     except KiroError as exc:
         await usage.record(ip=ip, model=model, status=502, stream=True,
                            latency_ms=int((time.perf_counter() - started) * 1000),
@@ -259,7 +279,7 @@ async def _stream(
         yield "data: [DONE]\n\n"
         return
 
-    _thinking, text = split_thinking(text)
+    text = "".join(parts)
 
     await usage.record(
         ip=ip,
@@ -273,13 +293,6 @@ async def _stream(
         user_agent=user_agent,
         key_id=key_id,
     )
-
-    yield _chunk(completion_id, created, model, {"role": "assistant", "content": ""}, None)
-
-    size = max(1, settings.stream_chunk_size)
-    for index in range(0, len(text), size):
-        yield _chunk(completion_id, created, model, {"content": text[index : index + size]}, None)
-        await asyncio.sleep(0)
 
     yield _chunk(completion_id, created, model, {}, "stop")
     yield "data: [DONE]\n\n"

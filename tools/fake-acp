@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Stub ACP agent for testing the client without spending Kiro credits.
+
+ACP_DIALECT=spec  (default)  session/update  + snake_case sessionUpdate,
+                             prompt array named "prompt",
+                             turn ends via stopReason on the response.
+ACP_DIALECT=kiro             session/notification + PascalCase update names,
+                             prompt array named "content",
+                             turn ends via a TurnEnd notification.
+
+Other switches:
+  ACP_NO_THOUGHT=1   omit reasoning chunks
+  ACP_ASK_PERMISSION=1  send a permission request before answering
+  ACP_REFUSE=1       finish with stopReason "refusal"
+  ACP_NO_SET_MODEL=1 reject session/set_model
+"""
+import json
+import os
+import sys
+
+DIALECT = os.environ.get("ACP_DIALECT", "spec")
+SPEC = DIALECT != "kiro"
+
+THOUGHTS = [
+    "The user is asking for a comparison. ",
+    "A table is the clearest shape here, ",
+    "then a short code sample.",
+]
+
+ANSWER = [
+    "# Storage comparison\n\nBoth work, but they differ on **concurrency**.\n\n",
+    "| Engine | Writes | Cost |\n| --- | ---: | :-: |\n",
+    "| SQLite | 50k/s | $0.00 |\n| Postgres | 12k/s | $$ |\n\n",
+    "## Steps\n\n1. Start with SQLite\n2. Move when you need *multi-writer*\n\n",
+    "- [x] Benchmark\n- [ ] Decide\n\n> Measure first.\n\n",
+    "```python\nimport sqlite3\nconn = sqlite3.connect(\"usage.db\")\n```\n",
+]
+
+
+def out(payload):
+    sys.stdout.write(json.dumps(payload) + "\n")
+    sys.stdout.flush()
+
+
+def notify(session_id, kind_spec, kind_kiro, text):
+    if SPEC:
+        out({"jsonrpc": "2.0", "method": "session/update", "params": {
+            "sessionId": session_id,
+            "update": {"sessionUpdate": kind_spec, "messageId": "msg_1",
+                       "content": {"type": "text", "text": text}}}})
+    else:
+        out({"jsonrpc": "2.0", "method": "session/notification", "params": {
+            "sessionId": session_id,
+            "type": kind_kiro,
+            "content": [{"type": "text", "text": text}]}})
+
+
+def main():
+    session_id = "sess_stub"
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        method = msg.get("method")
+        mid = msg.get("id")
+
+        if method == "initialize":
+            out({"jsonrpc": "2.0", "id": mid, "result": {
+                "protocolVersion": 1,
+                "agentCapabilities": {"loadSession": True,
+                                      "promptCapabilities": {"image": True}},
+                "agentInfo": {"name": "fake-acp", "version": "1.0.0"}}})
+
+        elif method == "session/new":
+            key = "sessionId" if SPEC else "session_id"
+            out({"jsonrpc": "2.0", "id": mid, "result": {key: session_id}})
+
+        elif method == "session/set_model":
+            if os.environ.get("ACP_NO_SET_MODEL"):
+                out({"jsonrpc": "2.0", "id": mid,
+                     "error": {"code": -32602, "message": "unsupported"}})
+            else:
+                out({"jsonrpc": "2.0", "id": mid, "result": {}})
+
+        elif method == "session/prompt":
+            params = msg.get("params") or {}
+            # Echo which parameter name carried the prompt, so the test can
+            # confirm the client satisfies both dialects.
+            arr = params.get("prompt" if SPEC else "content")
+            text = ""
+            if isinstance(arr, list) and arr:
+                text = arr[0].get("text", "")
+            sys.stderr.write("prompt_len={0}\n".format(len(text)))
+
+            if os.environ.get("ACP_ASK_PERMISSION"):
+                out({"jsonrpc": "2.0", "id": 9001, "method": "session/request_permission",
+                     "params": {"sessionId": session_id, "options": [
+                         {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                         {"optionId": "reject", "name": "Reject", "kind": "reject_once"}]}})
+                # Wait for the client's answer before continuing.
+                reply = sys.stdin.readline()
+                sys.stderr.write("permission_reply={0}".format(reply))
+
+            if not os.environ.get("ACP_NO_THOUGHT"):
+                for piece in THOUGHTS:
+                    notify(session_id, "agent_thought_chunk", "AgentThoughtChunk", piece)
+
+            for piece in ANSWER:
+                notify(session_id, "agent_message_chunk", "AgentMessageChunk", piece)
+
+            if os.environ.get("ACP_REFUSE"):
+                out({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "refusal"}})
+            elif SPEC:
+                out({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
+            else:
+                out({"jsonrpc": "2.0", "method": "session/notification",
+                     "params": {"sessionId": session_id, "type": "TurnEnd"}})
+                out({"jsonrpc": "2.0", "id": mid, "result": {}})
+
+        elif mid is not None:
+            out({"jsonrpc": "2.0", "id": mid, "result": {}})
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

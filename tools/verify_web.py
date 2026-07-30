@@ -188,13 +188,13 @@ with TestClient(app) as client:
         raw = "".join(stream.iter_text())
     events = [json.loads(l) for l in raw.splitlines() if l.strip()]
     kinds = [e["type"] for e in events]
-    think = next((e for e in events if e["type"] == "thinking"), None)
+    thinking_text = "".join(e["text"] for e in events if e["type"] == "thinking_delta")
     answer = "".join(e["text"] for e in events if e["type"] == "delta")
 
-    check("a thinking event is emitted", think is not None, kinds[:4])
-    check("thinking carries the reasoning", think and "clearest shape" in think["text"], think)
-    check("thinking precedes the answer",
-          kinds.index("thinking") < kinds.index("delta"), kinds[:4])
+    check("reasoning is streamed", bool(thinking_text), kinds[:4])
+    check("reasoning carries the text", "clearest shape" in thinking_text, thinking_text[:80])
+    check("reasoning precedes the answer",
+          kinds.index("thinking_delta") < kinds.index("delta"), kinds[:4])
     check("answer excludes the reasoning", "<thinking>" not in answer, answer[:120])
     check("answer excludes reasoning prose", "clearest shape" not in answer, answer[:120])
     check("answer keeps its markdown", "| Engine | Writes |" in answer, answer[:200])

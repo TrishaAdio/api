@@ -269,14 +269,24 @@ svg.i, .item svg, .ship svg, .chev, .panel-icon svg, .peek svg {
 @keyframes fade { 50% { opacity: .25; } }
 
 /* ── stage ── */
-.stage { position: relative; display: grid; overflow: hidden; }
+.stage { position: relative; display: grid; min-height: 0; overflow: hidden; }
 
+/* Column flex, not grid rows: an `auto` track sized by the scroll pane's
+   content made the page taller than the viewport, so `overflow: hidden` on
+   .stage clipped it and nothing could scroll. */
 .page {
   grid-area: 1 / 1;
   display: none;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  min-width: 0;
 }
-.page.active { display: grid; animation: pageIn .26s var(--out) both; }
+.page.active {
+  display: flex;
+  flex-direction: column;
+  animation: pageIn .26s var(--out) both;
+}
+.page > .bar, .page > .dock { flex: 0 0 auto; }
+.page > .thread, .page > .flow { flex: 1 1 auto; min-height: 0; }
 
 @keyframes pageIn {
   from { opacity: 0; transform: translateY(7px); }
@@ -299,13 +309,19 @@ svg.i, .item svg, .ship svg, .chev, .panel-icon svg, .peek svg {
 .meta { color: var(--ink-3); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 
 .flow {
-  grid-row: 2 / span 2;
   overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   padding: 18px 20px 36px;
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
+
+/* Without this, column flex items shrink to fit the pane instead of
+   overflowing it, so cards collapse and nothing ever scrolls. */
+.flow > * { flex: 0 0 auto; }
 
 /* scrollbars */
 .flow, .thread, .pop-list, .scroll-x { scrollbar-width: thin; scrollbar-color: var(--hair-2) transparent; }
@@ -650,7 +666,13 @@ table.grid td.dim { color: var(--ink-3); white-space: normal; }
 
 /* ═══ chat ═════════════════════════════════════════════════ */
 
-.thread { overflow-y: auto; padding: 24px 20px 4px; }
+.thread {
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 24px 20px 4px;
+}
 
 .welcome { display: grid; place-content: center; justify-items: center; height: 100%; min-height: 300px; text-align: center; }
 .welcome h2 { margin: 0 0 6px; font-size: 24px; font-weight: 600; letter-spacing: -.026em; }
@@ -1314,3 +1336,15 @@ table.md td[style*="right"], table.md th[style*="right"] { font-variant-numeric:
 .think-body p { margin: 0 0 9px; }
 
 .toggle.inline { align-self: flex-start; }
+
+
+/* Reasoning still arriving: mark the toggle as active. */
+.think.live .think-toggle {
+  border-color: #6c5cff4d;
+  color: var(--ink);
+  background: var(--accent-dim);
+}
+.think.live .think-toggle span::after {
+  content: "…";
+  animation: fade 1.1s ease-in-out infinite;
+}

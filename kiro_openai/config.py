@@ -66,6 +66,16 @@ class Settings:
         )
     )
 
+    # "acp"  — JSON-RPC over stdio. Streams live and delivers raw markdown.
+    # "cli"  — `chat --no-interactive`. One shot, and the CLI renders markdown
+    #          for a terminal, so formatting is lost.
+    backend: str = field(default_factory=lambda: os.getenv("KIRO_BACKEND", "acp").strip().lower())
+
+    # Fall back to the CLI backend if ACP cannot start.
+    acp_fallback: bool = field(
+        default_factory=lambda: os.getenv("ACP_FALLBACK", "true").lower() not in ("0", "false", "no")
+    )
+
     # Whether the CLI should emit its reasoning. When on, the console shows it
     # in a collapsed block; the OpenAI surface always returns only the answer.
     show_thinking: bool = field(
@@ -94,6 +104,10 @@ class Settings:
 
     # Bytes emitted per SSE chunk when streaming.
     stream_chunk_size: int = field(default_factory=lambda: int(os.getenv("KIRO_STREAM_CHUNK_SIZE", "24")))
+
+    @property
+    def use_acp(self) -> bool:
+        return self.backend == "acp"
 
     def admin_ip_set(self) -> set:
         """Root admin IPs. Loopback is always included so curl works locally."""
