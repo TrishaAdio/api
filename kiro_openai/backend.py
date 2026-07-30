@@ -41,6 +41,30 @@ def _clean(raw: str) -> str:
     return "\n".join(kept).strip()
 
 
+_THINK_RE = re.compile(r"<(thinking|think|reasoning)>(.*?)(?:</\1>|\Z)", re.DOTALL | re.IGNORECASE)
+
+
+def split_thinking(text: str) -> Tuple[str, str]:
+    """Separate reasoning from the answer.
+
+    Returns (thinking, answer). The console renders the two differently, and
+    the OpenAI surface returns only the answer, since its schema has no field
+    for reasoning. Mirrors splitThinking() in static/md.js.
+    """
+    if not text:
+        return "", ""
+
+    parts: List[str] = []
+
+    def take(match: "re.Match") -> str:
+        parts.append(match.group(2).strip())
+        return ""
+
+    answer = _THINK_RE.sub(take, text)
+    answer = re.sub(r"\n{3,}", "\n\n", answer).strip()
+    return "\n\n".join(p for p in parts if p).strip(), answer
+
+
 def _strip_response_marker(text: str) -> str:
     """Remove the '> ' marker the CLI prints ahead of its answer.
 
@@ -85,8 +109,24 @@ class KiroBackend:
         os.makedirs(settings.workdir, exist_ok=True)
 
         self._chat_flags = await self._probe_chat_flags()
+        await self.apply_thinking_setting()
         self._models = await self._probe_models()
         self._ready = True
+
+    async def apply_thinking_setting(self) -> None:
+        """Align the CLI's chat.showThinking with our own configuration.
+
+        Reasoning is only available to display if the CLI emits it, and the
+        console offers a toggle, so the two must not drift apart.
+        """
+        value = "true" if settings.show_thinking else "false"
+        try:
+            await self._exec(
+                [settings.cli_bin, "settings", "chat.showThinking", value], timeout=30
+            )
+        except KiroError:
+            # Older builds may not expose this setting; not fatal.
+            pass
 
     @property
     def ready(self) -> bool:

@@ -66,6 +66,12 @@ class Settings:
         )
     )
 
+    # Whether the CLI should emit its reasoning. When on, the console shows it
+    # in a collapsed block; the OpenAI surface always returns only the answer.
+    show_thinking: bool = field(
+        default_factory=lambda: os.getenv("KIRO_SHOW_THINKING", "true").lower() not in ("0", "false", "no")
+    )
+
     enable_web_ui: bool = field(
         default_factory=lambda: os.getenv("ENABLE_WEB_UI", "true").lower() not in ("0", "false", "no")
     )

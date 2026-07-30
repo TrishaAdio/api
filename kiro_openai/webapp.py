@@ -23,7 +23,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import usage
-from .backend import KiroError, ModelNotAvailable, backend
+from .backend import KiroError, ModelNotAvailable, backend, split_thinking
 from .config import settings
 from .prompt import build_prompt, estimate_tokens
 from .schemas import ChatMessage
@@ -95,6 +95,7 @@ class SettingsPatch(BaseModel):
     usd_per_credit: Optional[float] = None
     plan_name: Optional[str] = None
     plan_credits: Optional[float] = None
+    show_thinking: Optional[bool] = None
 
 
 class KeyCreate(BaseModel):
@@ -123,6 +124,7 @@ async def bootstrap(_ip: str = Depends(require_admin)):
         "models": backend.model_catalog(),
         "default_model": settings.default_model,
         "model_selection": backend.supports_model_flag,
+        "show_thinking": settings.show_thinking,
         "ready": backend.ready,
         "cli": settings.cli_bin,
         "port": settings.port,
@@ -255,6 +257,7 @@ async def read_settings(_ip: str = Depends(require_admin)):
         "usd_per_credit": settings.usd_per_credit,
         "plan_name": settings.plan_name,
         "plan_credits": settings.plan_credits,
+        "show_thinking": settings.show_thinking,
         "cli": settings.cli_bin,
         "model_selection": backend.supports_model_flag,
         "env_file": settings.env_file,
@@ -305,6 +308,12 @@ async def write_settings(patch: SettingsPatch, _ip: str = Depends(require_admin)
         updates["PLAN_NAME"] = name
         settings.plan_name = name
 
+    if patch.show_thinking is not None:
+        settings.show_thinking = bool(patch.show_thinking)
+        updates["KIRO_SHOW_THINKING"] = "true" if settings.show_thinking else "false"
+        # Push it to the CLI too, or it keeps emitting (or withholding) reasoning.
+        await backend.apply_thinking_setting()
+
     if not updates:
         return {"saved": []}
 
@@ -354,6 +363,10 @@ async def web_chat(body: WebChatRequest, request: Request, ip: str = Depends(req
             return
 
         elapsed = int((time.perf_counter() - started) * 1000)
+
+        thinking, text = split_thinking(text)
+        if thinking:
+            yield _event({"type": "thinking", "text": thinking})
 
         # The CLI returns the answer whole, so this is paced replay. It keeps
         # the UI responsive; it does not improve time-to-first-token.

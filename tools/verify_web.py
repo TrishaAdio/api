@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """RioApis console: IP whitelist, key generation, dollar accounting, chat."""
+import json
 import os
 import pathlib
 import sys
@@ -178,6 +179,43 @@ with TestClient(app) as client:
     check("overage priced", abs(tight["over_usd"] - round((spent - 2.0) * rate, 4)) < 1e-6, tight)
     check("percent caps at 100", tight["percent_used"] == 100.0, tight)
     client.post("/api/settings", json={"plan_credits": 1000, "plan_name": "Pro"})
+
+    print("\n== reasoning is separated from the answer ==")
+    os.environ["FAKE_RICH"] = "1"
+    with client.stream("POST", "/api/chat", json={
+        "model": "auto", "messages": [{"role": "user", "content": "compare"}],
+    }) as stream:
+        raw = "".join(stream.iter_text())
+    events = [json.loads(l) for l in raw.splitlines() if l.strip()]
+    kinds = [e["type"] for e in events]
+    think = next((e for e in events if e["type"] == "thinking"), None)
+    answer = "".join(e["text"] for e in events if e["type"] == "delta")
+
+    check("a thinking event is emitted", think is not None, kinds[:4])
+    check("thinking carries the reasoning", think and "clearest shape" in think["text"], think)
+    check("thinking precedes the answer",
+          kinds.index("thinking") < kinds.index("delta"), kinds[:4])
+    check("answer excludes the reasoning", "<thinking>" not in answer, answer[:120])
+    check("answer excludes reasoning prose", "clearest shape" not in answer, answer[:120])
+    check("answer keeps its markdown", "| Engine | Writes |" in answer, answer[:200])
+    check("answer keeps its code fence", "```python" in answer, answer[-400:])
+
+    print("\n== the OpenAI surface returns only the answer ==")
+    r = client.post("/v1/chat/completions", headers={"Authorization": "Bearer sk-bootstrap-xyz"},
+                    json={"messages": [{"role": "user", "content": "compare"}]})
+    content = r.json()["choices"][0]["message"]["content"]
+    check("no reasoning tags in /v1 content", "<thinking>" not in content, content[:120])
+    check("no reasoning prose in /v1 content", "clearest shape" not in content, content[:120])
+    check("/v1 content starts at the answer", content.startswith("# Storage"), content[:60])
+    os.environ.pop("FAKE_RICH", None)
+
+    print("\n== the thinking toggle reaches the CLI ==")
+    off = client.post("/api/settings", json={"show_thinking": False})
+    check("saved", off.status_code == 200, off.text)
+    check("persisted to .env", "KIRO_SHOW_THINKING=false" in open(os.environ["ENV_FILE"]).read())
+    check("reported back", client.get("/api/settings").json()["show_thinking"] is False)
+    client.post("/api/settings", json={"show_thinking": True})
+    check("re-enabled", client.get("/api/settings").json()["show_thinking"] is True)
 
     print("\n== settings persist to .env ==")
     saved = client.post("/api/settings", json={

@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import usage, webapp
-from .backend import KiroError, ModelNotAvailable, backend
+from .backend import KiroError, ModelNotAvailable, backend, split_thinking
 from .config import settings
 from .prompt import build_prompt, estimate_tokens
 from .schemas import ChatCompletionRequest, Model, ModelList
@@ -173,6 +173,9 @@ async def chat_completions(
                            user_agent=agent, error=str(exc), key_id=key_id)
         return _openai_error(502, str(exc), "server_error")
 
+    # OpenAI's schema has no field for reasoning, so only the answer is returned.
+    _thinking, text = split_thinking(text)
+
     prompt_tokens = estimate_tokens(prompt)
     completion_tokens = estimate_tokens(text)
     await usage.record(
@@ -255,6 +258,8 @@ async def _stream(
         )
         yield "data: [DONE]\n\n"
         return
+
+    _thinking, text = split_thinking(text)
 
     await usage.record(
         ip=ip,

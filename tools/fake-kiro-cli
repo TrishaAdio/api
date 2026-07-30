@@ -30,6 +30,46 @@ Options:
 """
 
 
+RICH_ANSWER = """<thinking>
+The user wants a comparison. A table is the clearest shape, then a code sample.
+</thinking>
+# Storage comparison
+
+Both work, but they differ on **concurrency** and `write` throughput.
+
+| Engine | Writes | Concurrency | Cost |
+| --- | ---: | :-: | --- |
+| SQLite | 50k/s | single | $0.00 |
+| Postgres | 12k/s | high | $$ |
+
+## Recommendation
+
+1. Start with SQLite
+   - zero operational overhead
+   - WAL handles concurrent readers
+2. Move to Postgres when you need *multi-writer* access
+
+- [x] Benchmark both
+- [ ] Decide on retention
+
+> Measure before switching.
+
+```python
+import sqlite3
+
+conn = sqlite3.connect("usage.db")
+conn.execute("PRAGMA journal_mode=WAL")
+```
+
+See https://sqlite.org/wal.html for details, or the
+[Postgres docs](https://www.postgresql.org/docs/).
+
+---
+
+~~Use MySQL~~ — not recommended here.
+"""
+
+
 def chat_help() -> str:
     # FAKE_NO_MODEL_FLAG simulates a CLI build without per-request model choice.
     line = "" if os.environ.get("FAKE_NO_MODEL_FLAG") else MODEL_HELP_LINE
@@ -101,6 +141,12 @@ def main() -> int:
     # bridge's cleanup logic strips it.
     sys.stdout.write("\u280b\r\u2819\r")
     sys.stdout.write("\x1b[38;5;13m")
+
+    # FAKE_RICH returns a document exercising every markdown construct plus a
+    # reasoning block, for testing the console renderer.
+    if os.environ.get("FAKE_RICH"):
+        sys.stdout.write(RICH_ANSWER)
+        return 0
 
     # The real CLI prefixes its answer with "> "; reproduce it so the bridge's
     # marker stripping is exercised.

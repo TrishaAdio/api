@@ -406,6 +406,17 @@
               <input id="trust-tools" type="text" placeholder="read,grep" spellcheck="false">
               <small>Empty means no tools are trusted, so it behaves as a plain chat model.</small>
             </div>
+
+            <div class="fld">
+              <label>Reasoning</label>
+              <label class="toggle inline">
+                <input type="checkbox" id="show-thinking">
+                <span class="rail-sm"><i></i></span>
+                <span>Show the model's thinking</span>
+              </label>
+              <small>Sets <code>chat.showThinking</code> on the CLI. Shown collapsed in chat;
+                the API always returns only the answer.</small>
+            </div>
           </div>
 
           <div class="box-head divider"><h2>Billing</h2></div>
@@ -456,6 +467,7 @@
 </div>
 
 <div class="toasts" id="toasts"></div>
+<script src="/static/md.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

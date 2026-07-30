@@ -63,26 +63,39 @@ function until(ts) {
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-/* Minimal markdown: fenced code, inline code, bold, paragraphs. */
-function md(src) {
-  const blocks = [];
-  let text = String(src).replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, _l, code) => {
-    blocks.push(code.replace(/\n$/, ''));
-    return `\u0000${blocks.length - 1}\u0000`;
-  });
-
-  text = esc(text)
-    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-
-  return text.split(/\n{2,}/)
-    .map((p) => (p.trim() ? `<p>${p.replace(/\n/g, '<br>')}</p>` : ''))
-    .join('')
-    .replace(/<p>\u0000(\d+)\u0000<\/p>|\u0000(\d+)\u0000/g,
-      (_m, a, b) => `<pre><code>${esc(blocks[a ?? b])}</code></pre>`);
-}
+/* Rendering is delegated to md.js so it stays unit-testable. */
+const md = (src) => RioMD.render(src);
 
 const icon = (id) => `<svg><use href="#${id}"/></svg>`;
+
+/* Reasoning arrives before the answer and is collapsed by default: it is
+   context, not the result. */
+function showThinking(turn, text) {
+  if (!turn || !text) return;
+  const host = $('.think', turn);
+  if (!host) return;
+  host.hidden = false;
+  host.innerHTML =
+    `<button type="button" class="think-toggle">
+       <svg class="think-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+         <path d="M9 6l6 6-6 6"/>
+       </svg>
+       <span>Thinking</span><em>${wordCount(text)} words</em>
+     </button>
+     <div class="think-body" hidden>${md(text)}</div>`;
+
+  const toggle = $('.think-toggle', host);
+  const panel = $('.think-body', host);
+  toggle.onclick = () => {
+    const open = panel.hidden;
+    panel.hidden = !open;
+    host.classList.toggle('open', open);
+    $('span', toggle).textContent = open ? 'Hide thinking' : 'Thinking';
+  };
+}
+
+const wordCount = (s) => String(s).trim().split(/\s+/).filter(Boolean).length;
 
 function toast(message, kind = 'ok') {
   const el = document.createElement('div');
@@ -230,7 +243,9 @@ function turn(role, text) {
   $('#welcome')?.remove();
   const el = document.createElement('div');
   el.className = `turn ${role === 'user' ? 'me' : 'bot'}`;
-  el.innerHTML = `<span class="who">${role === 'user' ? 'You' : 'RioApis'}</span><div class="body"></div>`;
+  el.innerHTML = `<span class="who">${role === 'user' ? 'You' : 'RioApis'}</span>` +
+    (role === 'user' ? '' : '<div class="think" hidden></div>') +
+    '<div class="body"></div>';
   const body = $('.body', el);
   if (role === 'user') body.textContent = text;
   $('#thread').append(el);
@@ -257,6 +272,23 @@ async function send(text) {
   $('#turn-meta').textContent = '';
 
   let answer = '';
+  let frame = 0;
+  let dirty = false;
+
+  // Re-parsing markdown on every 3-character delta would burn the main thread
+  // on long answers, so repaint at most once per frame.
+  const paint = () => {
+    dirty = true;
+    if (frame) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      if (!dirty) return;
+      dirty = false;
+      body.innerHTML = md(answer) + '<span class="caret"></span>';
+      bottom();
+    });
+  };
+
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
@@ -284,11 +316,13 @@ async function send(text) {
         let evt;
         try { evt = JSON.parse(line); } catch { continue; }
 
-        if (evt.type === 'delta') {
+        if (evt.type === 'thinking') {
+          showThinking(body.closest('.turn'), evt.text);
+        } else if (evt.type === 'delta') {
           answer += evt.text;
-          body.innerHTML = md(answer) + '<span class="caret"></span>';
-          bottom();
+          paint();
         } else if (evt.type === 'done') {
+          cancelAnimationFrame(frame);
           body.innerHTML = md(answer);
           const tail = document.createElement('div');
           tail.className = 'tail';
@@ -615,6 +649,7 @@ async function loadSettings() {
     $('#trust-tools').value = d.trust_tools || '';
     $('#rate').value = d.usd_per_credit;
     $('#plan-credits').value = d.plan_credits;
+    $('#show-thinking').checked = !!d.show_thinking;
     $('#plan-name').value = Object.keys(PLANS).includes(d.plan_name) ? d.plan_name : 'Custom';
     $('#cli-path').textContent = d.cli;
     $('#env-path').textContent = d.env_file;
@@ -745,6 +780,7 @@ function wire() {
       usd_per_credit: parseFloat($('#rate').value || '0.04'),
       plan_name: $('#plan-name').value,
       plan_credits: parseFloat($('#plan-credits').value || '0'),
+      show_thinking: $('#show-thinking').checked,
     };
     const key = $('#kiro-key').value.trim();
     if (key) payload.kiro_api_key = key;
@@ -770,8 +806,21 @@ function wire() {
     f.type = f.type === 'password' ? 'text' : 'password';
   });
   document.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-copy-el]');
-    if (btn) copy(document.getElementById(btn.dataset.copyEl).textContent);
+    const target = e.target.closest('[data-copy-el]');
+    if (target) copy(document.getElementById(target.dataset.copyEl).textContent);
+
+    // Code blocks are re-rendered on every stream tick, so this is delegated
+    // rather than bound per button.
+    const code = e.target.closest('.code-copy');
+    if (code) {
+      copy(decodeURIComponent(code.dataset.raw || ''));
+      code.textContent = 'Copied';
+      code.classList.add('done');
+      setTimeout(() => {
+        code.textContent = 'Copy';
+        code.classList.remove('done');
+      }, 1400);
+    }
   });
 }
 
