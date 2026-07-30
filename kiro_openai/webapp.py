@@ -93,6 +93,8 @@ class SettingsPatch(BaseModel):
     default_model: Optional[str] = None
     trust_tools: Optional[str] = None
     usd_per_credit: Optional[float] = None
+    plan_name: Optional[str] = None
+    plan_credits: Optional[float] = None
 
 
 class KeyCreate(BaseModel):
@@ -149,6 +151,8 @@ async def usage_stats(_ip: str = Depends(require_admin)):
     data = await usage.stats()
     data["totals"]["usd"] = usd(data["totals"].get("credits", 0))
     data["last_24h"]["usd"] = usd(data["last_24h"].get("credits", 0))
+    data["period"]["usd"] = usd(data["period"].get("credits", 0))
+    data["budget"] = _budget(data["period"])
     for row in data["by_model"]:
         row["usd"] = usd(row.get("credits", 0))
     for row in data["by_ip"]:
@@ -249,6 +253,8 @@ async def read_settings(_ip: str = Depends(require_admin)):
         "default_model": settings.default_model,
         "trust_tools": ",".join(settings.trust_tools),
         "usd_per_credit": settings.usd_per_credit,
+        "plan_name": settings.plan_name,
+        "plan_credits": settings.plan_credits,
         "cli": settings.cli_bin,
         "model_selection": backend.supports_model_flag,
         "env_file": settings.env_file,
@@ -286,6 +292,18 @@ async def write_settings(patch: SettingsPatch, _ip: str = Depends(require_admin)
             return JSONResponse(status_code=400, content={"error": "Rate must not be negative."})
         updates["USD_PER_CREDIT"] = str(rate)
         settings.usd_per_credit = rate
+
+    if patch.plan_credits is not None:
+        allowance = float(patch.plan_credits)
+        if allowance < 0:
+            return JSONResponse(status_code=400, content={"error": "Allowance must not be negative."})
+        updates["PLAN_CREDITS"] = str(allowance)
+        settings.plan_credits = allowance
+
+    if patch.plan_name is not None:
+        name = patch.plan_name.strip()[:40]
+        updates["PLAN_NAME"] = name
+        settings.plan_name = name
 
     if not updates:
         return {"saved": []}
@@ -371,6 +389,31 @@ async def web_chat(body: WebChatRequest, request: Request, ip: str = Depends(req
 
 
 # ─── internals ────────────────────────────────────────────────────────────
+
+
+def _budget(period: Dict[str, Any]) -> Dict[str, Any]:
+    """What is left of the monthly allowance, in credits and dollars."""
+    allowance = max(0.0, float(settings.plan_credits))
+    used = max(0.0, float(period.get("credits", 0)))
+    remaining = max(0.0, allowance - used)
+    over = max(0.0, used - allowance)
+
+    return {
+        "plan": settings.plan_name,
+        "allowance_credits": round(allowance, 4),
+        "allowance_usd": usd(allowance),
+        "used_credits": round(used, 4),
+        "used_usd": usd(used),
+        "remaining_credits": round(remaining, 4),
+        "remaining_usd": usd(remaining),
+        # Anything past the allowance is billed as pay-as-you-go overage.
+        "over_credits": round(over, 4),
+        "over_usd": usd(over),
+        "percent_used": round(min(100.0, (used / allowance) * 100), 2) if allowance else 0.0,
+        "requests": period.get("requests", 0),
+        "period_label": period.get("label", ""),
+        "reset": period.get("reset"),
+    }
 
 
 def _event(payload: Dict[str, Any]) -> str:

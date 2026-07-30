@@ -148,6 +148,37 @@ with TestClient(app) as client:
     check("done reports usd", '"usd"' in events[-1], events[-1])
     check("gpt-5.6-sol priced at 2.40 x $0.04 = $0.096", '"usd": 0.096' in events[-1], events[-1])
 
+    print("\n== credit budget ==")
+    stats = client.get("/api/stats").json()
+    budget = stats["budget"]
+    spent = stats["period"]["credits"]   # derived, so request order cannot break this
+    rate = stats["usd_per_credit"]
+    print("   spent {0} credits at ${1}/credit -> {2}".format(spent, rate, budget))
+
+    check("allowance reported", budget["allowance_credits"] == 1000.0, budget)
+    check("allowance in dollars", budget["allowance_usd"] == 40.0, budget)
+    check("used credits match the period", abs(budget["used_credits"] - spent) < 1e-6, budget)
+    check("used dollars = credits x rate",
+          abs(budget["used_usd"] - round(spent * rate, 4)) < 1e-6, budget)
+    check("remaining credits = allowance - used",
+          abs(budget["remaining_credits"] - (1000.0 - spent)) < 1e-6, budget)
+    check("remaining dollars = remaining x rate",
+          abs(budget["remaining_usd"] - round((1000.0 - spent) * rate, 4)) < 1e-6, budget)
+    check("percent used", abs(budget["percent_used"] - round(spent / 10, 2)) < 0.01, budget)
+    check("not over allowance", budget["over_credits"] == 0.0, budget)
+    check("period labelled", bool(budget["period_label"]), budget)
+    check("reset is in the future", budget["reset"] > __import__("time").time(), budget)
+
+    print("\n== allowance can be changed, overage surfaces ==")
+    client.post("/api/settings", json={"plan_credits": 2, "plan_name": "Free"})
+    tight = client.get("/api/stats").json()["budget"]
+    check("smaller allowance applied", tight["allowance_credits"] == 2.0, tight)
+    check("remaining floors at zero", tight["remaining_credits"] == 0.0, tight)
+    check("overage detected", abs(tight["over_credits"] - (spent - 2.0)) < 1e-6, tight)
+    check("overage priced", abs(tight["over_usd"] - round((spent - 2.0) * rate, 4)) < 1e-6, tight)
+    check("percent caps at 100", tight["percent_used"] == 100.0, tight)
+    client.post("/api/settings", json={"plan_credits": 1000, "plan_name": "Pro"})
+
     print("\n== settings persist to .env ==")
     saved = client.post("/api/settings", json={
         "kiro_api_key": "ksk_web_written_key",

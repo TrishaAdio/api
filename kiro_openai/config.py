@@ -47,6 +47,11 @@ class Settings:
     # https://kiro.dev/blog/new-pricing-plans-and-auto/
     usd_per_credit: float = field(default_factory=lambda: float(os.getenv("USD_PER_CREDIT", "0.04")))
 
+    # Monthly credit allowance, used to show what is left rather than only what
+    # has been spent. Free 50 / Pro 1000 / Pro+ 2000 / Pro Max 5000 / Power 10000.
+    plan_name: str = field(default_factory=lambda: os.getenv("PLAN_NAME", "Pro"))
+    plan_credits: float = field(default_factory=lambda: float(os.getenv("PLAN_CREDITS", "1000")))
+
     # Usage log database.
     usage_db_path: str = field(
         default_factory=lambda: os.getenv(

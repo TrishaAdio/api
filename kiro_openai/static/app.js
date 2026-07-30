@@ -1,205 +1,177 @@
-/* RioApis console.
-   Vanilla, no build step. Admin access is decided by the server from the
-   caller's IP, so there is no token to store client-side. */
+/* RioApis console — vanilla, no build step.
+   Admin access is decided server-side from the caller's IP, so nothing
+   sensitive is stored client-side. */
 'use strict';
 
-const $  = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+const $  = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
 const state = {
-  ip: '',
-  brand: 'RioApis',
-  models: [],
-  model: 'auto',
-  rate: 0.04,
-  messages: [],
-  streaming: false,
-  view: 'chat',
-  entries: [],
-  keys: [],
-  timer: null,
+  ip: '', models: [], model: 'auto', rate: 0.04,
+  messages: [], busy: false, view: 'chat',
+  entries: [], keys: [], timer: null,
 };
 
-/* ── net ───────────────────────────────────────────────── */
+/* ── net ─────────────────────────────────────────────────── */
 
 async function api(path, options = {}) {
   const res = await fetch('/api' + path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
+    headers: { 'Content-Type': 'application/json' }, ...options,
   });
-  if (res.status === 403) { showDenied(state.ip); throw new Error('forbidden'); }
-  const text = await res.text();
+  if (res.status === 403) { deny(state.ip); throw new Error('forbidden'); }
+  const body = await res.text();
   let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch { data = { detail: text }; }
+  try { data = body ? JSON.parse(body) : null; } catch { data = { detail: body }; }
   if (!res.ok) throw new Error((data && (data.detail || data.error)) || res.statusText);
   return data;
 }
 
-/* ── formatting ────────────────────────────────────────── */
+/* ── format ──────────────────────────────────────────────── */
 
-const money = (n) => {
+function money(n) {
   const v = Number(n || 0);
   if (v === 0) return '$0.00';
-  if (v < 0.01) return '$' + v.toFixed(4);
-  return '$' + v.toFixed(2);
-};
+  if (Math.abs(v) < 0.01) return '$' + v.toFixed(4);
+  if (Math.abs(v) < 1000) return '$' + v.toFixed(2);
+  return '$' + v.toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
 
 const num = (n) => Number(n || 0).toLocaleString();
+
+const credits = (n) => Number(n || 0).toLocaleString(undefined, {
+  minimumFractionDigits: 0, maximumFractionDigits: 1,
+});
 
 function ago(ts) {
   if (!ts) return '—';
   const s = Math.max(0, Date.now() / 1000 - ts);
-  if (s < 60)    return Math.floor(s) + 's ago';
-  if (s < 3600)  return Math.floor(s / 60) + 'm ago';
+  if (s < 60) return Math.floor(s) + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
   if (s < 86400) return Math.floor(s / 3600) + 'h ago';
   return Math.floor(s / 86400) + 'd ago';
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function until(ts) {
+  if (!ts) return '—';
+  const s = ts - Date.now() / 1000;
+  if (s <= 0) return 'resets now';
+  const d = Math.floor(s / 86400);
+  if (d >= 1) return `resets in ${d}d`;
+  return `resets in ${Math.max(1, Math.floor(s / 3600))}h`;
 }
 
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
 /* Minimal markdown: fenced code, inline code, bold, paragraphs. */
-function render(md) {
+function md(src) {
   const blocks = [];
-  let text = String(md).replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, _lang, code) => {
+  let text = String(src).replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, _l, code) => {
     blocks.push(code.replace(/\n$/, ''));
     return `\u0000${blocks.length - 1}\u0000`;
   });
 
-  text = escapeHtml(text)
+  text = esc(text)
     .replace(/`([^`\n]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
 
-  const html = text
-    .split(/\n{2,}/)
+  return text.split(/\n{2,}/)
     .map((p) => (p.trim() ? `<p>${p.replace(/\n/g, '<br>')}</p>` : ''))
-    .join('');
-
-  return html.replace(/<p>\u0000(\d+)\u0000<\/p>|\u0000(\d+)\u0000/g, (_m, a, b) =>
-    `<pre><code>${escapeHtml(blocks[a ?? b])}</code></pre>`);
+    .join('')
+    .replace(/<p>\u0000(\d+)\u0000<\/p>|\u0000(\d+)\u0000/g,
+      (_m, a, b) => `<pre><code>${esc(blocks[a ?? b])}</code></pre>`);
 }
 
-/* ── toasts ────────────────────────────────────────────── */
+const icon = (id) => `<svg><use href="#${id}"/></svg>`;
 
 function toast(message, kind = 'ok') {
   const el = document.createElement('div');
   el.className = `toast ${kind}`;
-  el.innerHTML = `<span class="tico">${kind === 'ok' ? '✔' : '✘'}</span><span>${escapeHtml(message)}</span>`;
+  el.innerHTML = icon(kind === 'ok' ? 'i-check' : 'i-x') + `<span>${esc(message)}</span>`;
   $('#toasts').append(el);
   setTimeout(() => {
-    el.classList.add('out');
+    el.classList.add('gone');
     el.addEventListener('animationend', () => el.remove());
-  }, 3200);
+  }, 3000);
 }
 
-async function copyText(text, label = 'Copied') {
+async function copy(text) {
   try {
     await navigator.clipboard.writeText(text);
-    toast(label);
+    toast('Copied');
   } catch {
-    // Clipboard API needs a secure context; fall back to a temp selection.
+    // Clipboard API needs a secure context; fall back to a hidden selection.
     const ta = document.createElement('textarea');
     ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
+    ta.style.cssText = 'position:fixed;opacity:0';
     document.body.append(ta);
     ta.select();
-    try { document.execCommand('copy'); toast(label); }
+    try { document.execCommand('copy'); toast('Copied'); }
     catch { toast('Copy failed — select it manually', 'err'); }
     ta.remove();
   }
 }
 
-/* ── boot ──────────────────────────────────────────────── */
+/* ── boot ────────────────────────────────────────────────── */
 
 async function boot() {
   let session;
-  try {
-    session = await (await fetch('/api/session')).json();
-  } catch {
-    $('#boot').hidden = true;
-    showDenied('');
-    return;
-  }
+  try { session = await (await fetch('/api/session')).json(); }
+  catch { $('#boot').hidden = true; return deny(''); }
 
   state.ip = session.ip || '';
-  state.brand = session.brand || 'RioApis';
-
-  if (!session.admin) {
-    $('#boot').hidden = true;
-    showDenied(state.ip);
-    return;
-  }
+  if (!session.admin) { $('#boot').hidden = true; return deny(state.ip); }
 
   $('#boot').hidden = true;
   $('#app').hidden = false;
-  $('#my-ip').textContent = state.ip || 'local';
-  $('#set-ip').textContent = state.ip || 'local';
+  $('#set-ip').textContent = state.ip || 'localhost';
 
-  positionGlow();
-  await loadBootstrap();
+  await bootstrap();
   wire();
-  refreshUsage();
+  loadUsage();
 }
 
-function showDenied(ip) {
+function deny(ip) {
   $('#app').hidden = true;
   $('#denied').hidden = false;
   $('#denied-ip').textContent = ip || 'unknown';
 }
 
-async function loadBootstrap() {
+async function bootstrap() {
   try {
     const data = await api('/bootstrap');
     state.models = data.models || [];
     state.rate = data.usd_per_credit ?? 0.04;
     state.model = data.default_model || 'auto';
-    setStatus(data.ready ? 'ok' : 'bad', data.ready ? 'ready' : 'CLI unavailable');
-    $('#brand-sub').textContent = data.model_selection ? 'OpenAI-compatible' : 'fixed model';
+    status(data.ready ? 'ok' : 'bad', data.ready ? state.ip || 'localhost' : 'CLI unavailable');
+    $('#logo-sub').textContent = data.model_selection ? 'OpenAI compatible' : 'fixed model';
     paintModels();
     paintDocs();
   } catch (err) {
-    setStatus('bad', 'error');
+    status('bad', 'error');
     if (err.message !== 'forbidden') toast(err.message, 'err');
   }
 }
 
-function setStatus(kind, text) {
-  const dot = $('#status .dot');
-  dot.className = `dot ${kind}`;
+function status(kind, text) {
+  $('#pip').className = `pip ${kind}`;
   $('#status-text').textContent = text;
 }
 
-/* ── navigation ────────────────────────────────────────── */
-
-function positionGlow() {
-  const active = $('.nav-item.active');
-  const glow = $('#nav-glow');
-  if (!active || !glow) return;
-  glow.style.transform = `translateY(${active.offsetTop}px)`;
-  glow.style.height = `${active.offsetHeight}px`;
-}
+/* ── nav ─────────────────────────────────────────────────── */
 
 function go(view) {
   state.view = view;
-  $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
-  $$('.view').forEach((v) => v.classList.toggle('active', v.dataset.view === view));
-  positionGlow();
+  $$('.item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
+  $$('.page').forEach((p) => p.classList.toggle('active', p.dataset.view === view));
 
-  if (view === 'usage')  refreshUsage();
-  if (view === 'keys')   refreshKeys();
-  if (view === 'access') refreshWhitelist();
+  if (view === 'usage') loadUsage();
+  if (view === 'keys') loadKeys();
+  if (view === 'access') loadWhitelist();
   if (view === 'settings') loadSettings();
 }
 
-/* ── models ────────────────────────────────────────────── */
-
-function costOf(model) {
-  const entry = state.models.find((m) => m.id === model);
-  return (entry ? entry.cost : 0) * state.rate;
-}
+/* ── models ──────────────────────────────────────────────── */
 
 function paintModels() {
   const current = state.models.find((m) => m.id === state.model) || state.models[0];
@@ -211,85 +183,76 @@ function paintModels() {
 
   const select = $('#default-model');
   if (select) {
-    select.innerHTML = state.models
-      .map((m) => `<option value="${m.id}">${m.id}</option>`).join('');
+    select.innerHTML = state.models.map((m) => `<option value="${m.id}">${m.id}</option>`).join('');
     select.value = state.model;
   }
-
-  paintModelList('');
+  paintOptions('');
 }
 
-function paintModelList(query) {
-  const list = $('#model-list');
+function paintOptions(query) {
   const q = query.trim().toLowerCase();
   const rows = state.models.filter((m) => !q || m.id.toLowerCase().includes(q));
+  const list = $('#model-list');
 
-  if (!rows.length) {
-    list.innerHTML = '<p class="muted tiny pad">No match</p>';
-    return;
-  }
+  if (!rows.length) { list.innerHTML = '<div class="void">No match</div>'; return; }
 
-  list.innerHTML = rows.map((m, i) => `
-    <button class="model-row ${m.id === state.model ? 'sel' : ''}" data-model="${m.id}"
-            style="animation-delay:${Math.min(i * 18, 220)}ms">
-      <span class="mid">${m.id}</span>
-      <span class="cost-pill">${money(m.cost * state.rate)}</span>
-      ${m.description ? `<span class="mdesc">${escapeHtml(m.description)}</span>` : ''}
+  list.innerHTML = rows.map((m) => `
+    <button class="opt ${m.id === state.model ? 'on' : ''}" data-model="${m.id}">
+      <span class="oid">${m.id}</span>
+      <span class="price">${money(m.cost * state.rate)}</span>
+      ${m.description ? `<span class="odesc">${esc(m.description)}</span>` : ''}
     </button>`).join('');
 
-  $$('.model-row', list).forEach((row) => {
-    row.onclick = () => {
-      state.model = row.dataset.model;
-      paintModels();
-      closeModelPop();
-    };
+  $$('.opt', list).forEach((opt) => opt.onclick = () => {
+    state.model = opt.dataset.model;
+    paintModels();
+    paintExample();
+    closePop();
   });
 }
 
-function openModelPop() {
+const openPop = () => {
   $('#model-pop').hidden = false;
   $('#model-btn').setAttribute('aria-expanded', 'true');
   $('#model-search').value = '';
-  paintModelList('');
+  paintOptions('');
   $('#model-search').focus();
-}
+};
 
-function closeModelPop() {
+const closePop = () => {
   $('#model-pop').hidden = true;
   $('#model-btn').setAttribute('aria-expanded', 'false');
+};
+
+/* ── chat ────────────────────────────────────────────────── */
+
+function turn(role, text) {
+  $('#welcome')?.remove();
+  const el = document.createElement('div');
+  el.className = `turn ${role === 'user' ? 'me' : 'bot'}`;
+  el.innerHTML = `<span class="who">${role === 'user' ? 'You' : 'RioApis'}</span><div class="body"></div>`;
+  const body = $('.body', el);
+  if (role === 'user') body.textContent = text;
+  $('#thread').append(el);
+  bottom();
+  return body;
 }
 
-/* ── chat ──────────────────────────────────────────────── */
-
-function addMessage(role, content) {
-  $('#empty-chat')?.remove();
-  const wrap = document.createElement('div');
-  wrap.className = `msg ${role === 'user' ? 'user' : 'bot'}`;
-  wrap.innerHTML = `
-    <div class="avatar">${role === 'user' ? 'You' : '◆'}</div>
-    <div class="bubble"></div>`;
-  const bubble = $('.bubble', wrap);
-  if (role === 'user') bubble.textContent = content;
-  $('#thread').append(wrap);
-  scrollThread();
-  return bubble;
-}
-
-function scrollThread() {
-  const thread = $('#thread');
-  thread.scrollTop = thread.scrollHeight;
+function bottom() {
+  const t = $('#thread');
+  t.scrollTop = t.scrollHeight;
 }
 
 async function send(text) {
-  if (!text.trim() || state.streaming) return;
+  if (!text.trim() || state.busy) return;
 
   state.messages.push({ role: 'user', content: text });
-  addMessage('user', text);
+  turn('user', text);
 
-  const bubble = addMessage('assistant', '');
-  bubble.innerHTML = '<span class="thinking"><i></i><i></i><i></i></span>';
+  const body = turn('assistant', '');
+  body.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
 
-  state.streaming = true;
+  state.busy = true;
   $('#send').disabled = true;
   $('#turn-meta').textContent = '';
 
@@ -300,7 +263,6 @@ async function send(text) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: state.model, messages: state.messages }),
     });
-
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || err.error || res.statusText);
@@ -314,7 +276,6 @@ async function send(text) {
       const { value, done } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
@@ -325,190 +286,222 @@ async function send(text) {
 
         if (evt.type === 'delta') {
           answer += evt.text;
-          bubble.innerHTML = render(answer) + '<span class="cursor"></span>';
-          scrollThread();
+          body.innerHTML = md(answer) + '<span class="caret"></span>';
+          bottom();
         } else if (evt.type === 'done') {
-          bubble.innerHTML = render(answer);
-          const foot = document.createElement('div');
-          foot.className = 'msg-foot';
-          foot.innerHTML = `
+          body.innerHTML = md(answer);
+          const tail = document.createElement('div');
+          tail.className = 'tail';
+          tail.innerHTML = `
             <span>${evt.model}</span>
             <span>${money(evt.usd)}</span>
             <span>${num(evt.prompt_tokens)} in · ${num(evt.completion_tokens)} out</span>
-            <span>${evt.latency_ms} ms</span>`;
-          bubble.append(foot);
-          $('#turn-meta').textContent = `${money(evt.usd)} · ${evt.latency_ms} ms`;
+            <span>${num(evt.latency_ms)} ms</span>`;
+          body.append(tail);
+          $('#turn-meta').textContent = `${money(evt.usd)} · ${num(evt.latency_ms)} ms`;
         } else if (evt.type === 'error') {
           throw new Error(evt.message);
         }
       }
     }
-
     if (answer) state.messages.push({ role: 'assistant', content: answer });
   } catch (err) {
-    bubble.closest('.msg').remove();
-    const box = document.createElement('div');
-    box.className = 'err-msg';
-    box.textContent = err.message;
-    $('#thread').append(box);
-    scrollThread();
+    body.closest('.turn').remove();
+    const oops = document.createElement('div');
+    oops.className = 'oops';
+    oops.textContent = err.message;
+    $('#thread').append(oops);
   } finally {
-    state.streaming = false;
+    state.busy = false;
     $('#send').disabled = false;
-    scrollThread();
+    bottom();
   }
 }
 
-/* ── usage ─────────────────────────────────────────────── */
+/* ── usage ───────────────────────────────────────────────── */
 
-function countUp(el, target, format) {
+function tick(el, target, format) {
   const from = Number(el.dataset.v || 0);
   const to = Number(target || 0);
   el.dataset.v = to;
   if (from === to) { el.textContent = format(to); return; }
 
-  const start = performance.now();
-  const dur = 520;
-  const tick = (now) => {
-    const t = Math.min(1, (now - start) / dur);
-    const eased = 1 - Math.pow(1 - t, 3);
-    el.textContent = format(from + (to - from) * eased);
-    if (t < 1) requestAnimationFrame(tick);
+  const t0 = performance.now();
+  const step = (now) => {
+    const p = Math.min(1, (now - t0) / 500);
+    el.textContent = format(from + (to - from) * (1 - Math.pow(1 - p, 3)));
+    if (p < 1) requestAnimationFrame(step);
   };
-  requestAnimationFrame(tick);
+  requestAnimationFrame(step);
 }
 
-async function refreshUsage() {
+async function loadUsage() {
   try {
     const [stats, log] = await Promise.all([
-      api('/stats'),
-      api('/usage?limit=200' + filterQuery()),
+      api('/stats'), api('/usage?limit=200' + filters()),
     ]);
 
     state.rate = stats.usd_per_credit ?? state.rate;
     state.entries = log.entries || [];
 
-    countUp($('#s-usd'),  stats.totals.usd,               money);
-    countUp($('#s-req'),  stats.totals.requests,          (v) => num(Math.round(v)));
-    countUp($('#s-tin'),  stats.totals.prompt_tokens,     (v) => num(Math.round(v)));
-    countUp($('#s-tout'), stats.totals.completion_tokens, (v) => num(Math.round(v)));
-    countUp($('#s-ips'),  stats.totals.unique_ips,        (v) => num(Math.round(v)));
-    countUp($('#s-lat'),  stats.totals.avg_latency_ms,    (v) => num(Math.round(v)));
+    paintBudget(stats.budget);
+
+    tick($('#s-usd'), stats.totals.usd, money);
+    tick($('#s-req'), stats.totals.requests, (v) => num(Math.round(v)));
+    tick($('#s-tin'), stats.totals.prompt_tokens, (v) => num(Math.round(v)));
+    tick($('#s-tout'), stats.totals.completion_tokens, (v) => num(Math.round(v)));
+    tick($('#s-ips'), stats.totals.unique_ips, (v) => num(Math.round(v)));
+    tick($('#s-lat'), stats.totals.avg_latency_ms, (v) => num(Math.round(v)));
 
     $('#s-usd-24').textContent = `${money(stats.last_24h.usd)} in 24h`;
     $('#s-req-24').textContent = `${num(stats.last_24h.requests)} in 24h`;
     $('#rate-note').textContent =
-      `Cost is estimated as one credit-weighted request per call at $${state.rate} per credit. ` +
-      `The Kiro CLI reports no billing data, so treat these as approximations.`;
+      `Each call costs one credit-weighted request, priced at $${state.rate} per credit. ` +
+      `The Kiro CLI reports no billing data, so these are close estimates.`;
 
-    paintChart(stats.series || []);
-    paintBars('#by-model', (stats.by_model || []).map((r) => ({ label: r.model, value: r.usd, sub: `${num(r.requests)} req` })));
-    paintBars('#by-ip',    (stats.by_ip || []).map((r) => ({ label: r.ip || '—', value: r.usd, sub: `${num(r.requests)} req` })));
-    paintFilters(stats);
+    paintGraph(stats.series || []);
+    paintRanks('#by-model', (stats.by_model || []).map((r) =>
+      ({ label: r.model, value: r.usd, sub: `${num(r.requests)} req` })));
+    paintRanks('#by-ip', (stats.by_ip || []).map((r) =>
+      ({ label: r.ip || '—', value: r.usd, sub: `${num(r.requests)} req` })));
+    paintSelects(stats);
     paintLog();
   } catch (err) {
-    if (err.message !== 'forbidden') setStatus('bad', 'error');
+    if (err.message !== 'forbidden') status('bad', 'error');
   }
 }
 
-function paintChart(series) {
+function paintBudget(b) {
+  if (!b) return;
+
+  const used = Math.min(100, b.percent_used);
+  const left = Math.max(0, 100 - used);
+  // Colour tracks depletion; the bar length tracks what remains, so it
+  // agrees with the "credits remaining" headline above it.
+  const level = left <= 10 ? 'high' : left <= 30 ? 'mid' : '';
+
+  const headline = $('#b-usd');
+  headline.textContent = money(b.remaining_usd);
+  headline.className = level;   // keeps the figure and the bar telling one story
+  $('#b-credits').textContent = `${credits(b.remaining_credits)} of ${credits(b.allowance_credits)} credits`;
+  $('#b-plan').textContent = b.plan;
+  $('#b-reset').textContent = `${b.period_label} · ${until(b.reset)}`;
+
+  const fill = $('#b-fill');
+  fill.className = 'gauge-fill ' + level + (left === 0 ? ' empty' : '');
+  // Deferred so the width transition actually runs on first paint.
+  requestAnimationFrame(() => { fill.style.width = left + '%'; });
+
+  $('#b-used-usd').textContent = money(b.used_usd);
+  $('#b-used-credits').textContent = `${credits(b.used_credits)} credits`;
+  $('#b-left-usd').textContent = money(b.remaining_usd);
+  $('#b-requests').textContent = `${num(b.requests)} requests this period`;
+
+  const over = $('#b-over');
+  over.hidden = !b.over_credits;
+  if (b.over_credits) $('#b-over-usd').textContent = money(b.over_usd);
+
+  // Rail summary mirrors the headline figure.
+  $('#mini-budget').hidden = false;
+  $('#mini-usd').textContent = money(b.remaining_usd);
+  $('#mini-label').textContent = b.over_credits ? 'over allowance' : 'available';
+  const mini = $('#mini-fill');
+  mini.style.width = left + '%';
+  mini.style.background = level === 'high' ? 'var(--danger)'
+    : level === 'mid' ? 'var(--warn)' : 'var(--money)';
+}
+
+function paintGraph(series) {
   const peak = Math.max(...series.map((p) => p.usd), 0.0001);
   $('#chart-peak').textContent = `peak ${money(peak)}/h`;
   $('#chart').innerHTML = series.map((p, i) => {
-    const pct = Math.max(2, (p.usd / peak) * 100);
-    const hoursAgo = series.length - 1 - i;
-    return `<div class="bar ${p.usd ? '' : 'zero'}"
-                 style="height:${pct}%;animation-delay:${i * 22}ms">
-              <span>${money(p.usd)} · ${hoursAgo === 0 ? 'now' : hoursAgo + 'h ago'}</span>
-            </div>`;
+    // Floor real bars at 8% so a small hour is still legible; idle hours are
+    // styled as a flat stub instead of being scaled at all.
+    const h = p.usd ? Math.max(8, (p.usd / peak) * 100) : 0;
+    const back = series.length - 1 - i;
+    const when = back === 0 ? 'this hour' : `${back}h ago`;
+    return `<div class="col ${p.usd ? '' : 'nil'}" style="height:${h}%;animation-delay:${i * 14}ms">
+      <span>${money(p.usd)} · ${when}</span></div>`;
   }).join('');
 }
 
-function paintBars(selector, rows) {
-  const host = $(selector);
-  if (!rows.length) { host.innerHTML = '<p class="muted tiny">No data yet.</p>'; return; }
+function paintRanks(sel, rows) {
+  const host = $(sel);
+  if (!rows.length) { host.innerHTML = '<p class="fine">No data yet.</p>'; return; }
   const peak = Math.max(...rows.map((r) => r.value), 0.0001);
   host.innerHTML = rows.slice(0, 8).map((r, i) => `
-    <div class="brow" style="animation-delay:${i * 40}ms">
-      <div class="brow-top">
-        <code>${escapeHtml(r.label)}</code>
-        <b>${money(r.value)} · ${r.sub}</b>
-      </div>
-      <div class="meter"><i style="width:${(r.value / peak) * 100}%;animation-delay:${i * 40}ms"></i></div>
+    <div class="rank" style="animation-delay:${i * 32}ms">
+      <div class="rank-top"><code>${esc(r.label)}</code><b>${money(r.value)} · ${r.sub}</b></div>
+      <div class="rank-bar"><i style="width:${(r.value / peak) * 100}%;animation-delay:${i * 32}ms"></i></div>
     </div>`).join('');
 }
 
-function filterQuery() {
-  const model = $('#filter-model')?.value || '';
+function filters() {
+  const m = $('#filter-model')?.value || '';
   const ip = $('#filter-ip')?.value || '';
-  return (model ? `&model=${encodeURIComponent(model)}` : '') +
-         (ip ? `&ip=${encodeURIComponent(ip)}` : '');
+  return (m ? `&model=${encodeURIComponent(m)}` : '') + (ip ? `&ip=${encodeURIComponent(ip)}` : '');
 }
 
-function paintFilters(stats) {
-  const keep = (select, values, all) => {
-    const previous = select.value;
+function paintSelects(stats) {
+  const fill = (select, values, all) => {
+    const prev = select.value;
     select.innerHTML = `<option value="">${all}</option>` +
-      values.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
-    select.value = previous;
+      values.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+    select.value = prev;
   };
-  keep($('#filter-model'), (stats.by_model || []).map((r) => r.model).filter(Boolean), 'All models');
-  keep($('#filter-ip'), (stats.by_ip || []).map((r) => r.ip).filter(Boolean), 'All IPs');
+  fill($('#filter-model'), (stats.by_model || []).map((r) => r.model).filter(Boolean), 'All models');
+  fill($('#filter-ip'), (stats.by_ip || []).map((r) => r.ip).filter(Boolean), 'All addresses');
 }
 
 function paintLog() {
-  const body = $('#log-body');
-  const rows = state.entries;
-  $('#log-empty').hidden = rows.length > 0;
-
-  body.innerHTML = rows.map((r, i) => `
-    <tr style="animation-delay:${Math.min(i * 12, 260)}ms">
+  $('#log-empty').hidden = state.entries.length > 0;
+  $('#log-body').innerHTML = state.entries.map((r, i) => `
+    <tr style="animation-delay:${Math.min(i * 10, 240)}ms">
       <td>${ago(r.ts)}</td>
-      <td><code>${escapeHtml(r.ip || '—')}</code></td>
-      <td><code>${escapeHtml(r.model || '—')}</code></td>
-      <td class="num">${num(r.prompt_tokens)}</td>
-      <td class="num">${num(r.completion_tokens)}</td>
-      <td class="num">${money(r.usd)}</td>
-      <td class="num">${num(r.latency_ms)} ms</td>
-      <td><span class="tag ${r.source === 'web' ? 'web' : ''}">${escapeHtml(r.source)}</span></td>
-      <td><span class="tag ${r.status < 400 ? 'ok' : 'bad'}" ${r.error ? `title="${escapeHtml(r.error)}"` : ''}>${r.status}</span></td>
+      <td><code>${esc(r.ip || '—')}</code></td>
+      <td><code>${esc(r.model || '—')}</code></td>
+      <td class="r">${num(r.prompt_tokens)}</td>
+      <td class="r">${num(r.completion_tokens)}</td>
+      <td class="r">${money(r.usd)}</td>
+      <td class="r">${num(r.latency_ms)} ms</td>
+      <td><span class="pill ${r.source === 'web' ? 'mine' : ''}">${esc(r.source)}</span></td>
+      <td><span class="pill ${r.status < 400 ? 'ok' : 'bad'}"${r.error ? ` title="${esc(r.error)}"` : ''}>${r.status}</span></td>
     </tr>`).join('');
 }
 
-/* ── keys ──────────────────────────────────────────────── */
+/* ── keys ────────────────────────────────────────────────── */
 
-async function refreshKeys() {
+async function loadKeys() {
   try {
     const data = await api('/keys');
     state.keys = data.keys || [];
-    const body = $('#keys-body');
     $('#keys-empty').hidden = state.keys.length > 0;
 
-    body.innerHTML = state.keys.map((k, i) => `
-      <tr style="animation-delay:${i * 30}ms">
-        <td><code>${escapeHtml(k.prefix)}…</code></td>
-        <td>${escapeHtml(k.name || '—')}</td>
+    $('#keys-body').innerHTML = state.keys.map((k, i) => `
+      <tr style="animation-delay:${i * 26}ms">
+        <td><code>${esc(k.prefix)}…</code></td>
+        <td>${esc(k.name || '—')}</td>
         <td>${ago(k.created_at)}</td>
         <td>${k.last_used ? ago(k.last_used) : 'never'}</td>
-        <td><code>${escapeHtml(k.last_ip || '—')}</code></td>
-        <td class="num">${num(k.requests)}</td>
-        <td class="num">${money(k.usd)}</td>
-        <td><span class="tag ${k.revoked ? 'bad' : 'ok'}">${k.revoked ? 'revoked' : 'active'}</span></td>
-        <td class="row-actions">
-          ${k.revoked ? '' : `<button class="btn ghost tiny" data-revoke="${k.id}">Revoke</button>`}
-          <button class="btn danger tiny" data-del="${k.id}">Delete</button>
-        </td>
+        <td><code>${esc(k.last_ip || '—')}</code></td>
+        <td class="r">${num(k.requests)}</td>
+        <td class="r">${money(k.usd)}</td>
+        <td><span class="pill ${k.revoked ? 'bad' : 'ok'}">${k.revoked ? 'revoked' : 'active'}</span></td>
+        <td><div class="acts">
+          ${k.revoked ? '' : `<button class="btn ghost xs" data-revoke="${k.id}">Revoke</button>`}
+          <button class="btn quiet-danger xs" data-del="${k.id}">Delete</button>
+        </div></td>
       </tr>`).join('');
 
-    $$('[data-revoke]', body).forEach((b) => b.onclick = async () => {
+    $$('[data-revoke]').forEach((b) => b.onclick = async () => {
       await api(`/keys/${b.dataset.revoke}/revoke`, { method: 'POST' });
       toast('Key revoked');
-      refreshKeys();
+      loadKeys();
     });
-    $$('[data-del]', body).forEach((b) => b.onclick = async () => {
+    $$('[data-del]').forEach((b) => b.onclick = async () => {
       await api(`/keys/${b.dataset.del}`, { method: 'DELETE' });
       toast('Key deleted');
-      refreshKeys();
+      loadKeys();
     });
 
     paintDocsKeys();
@@ -517,28 +510,27 @@ async function refreshKeys() {
   }
 }
 
-/* ── whitelist ─────────────────────────────────────────── */
+/* ── whitelist ───────────────────────────────────────────── */
 
-async function refreshWhitelist() {
+async function loadWhitelist() {
   try {
     const data = await api('/whitelist');
-    const body = $('#wl-body');
-    body.innerHTML = (data.entries || []).map((e, i) => `
-      <tr style="animation-delay:${i * 30}ms">
-        <td><code>${escapeHtml(e.ip)}</code>${e.ip === state.ip ? ' <span class="tag ok">you</span>' : ''}</td>
-        <td>${escapeHtml(e.label || '—')}</td>
+    $('#wl-body').innerHTML = (data.entries || []).map((e, i) => `
+      <tr style="animation-delay:${i * 26}ms">
+        <td><code>${esc(e.ip)}</code>${e.ip === state.ip ? ' <span class="pill mine">you</span>' : ''}</td>
+        <td>${esc(e.label || '—')}</td>
         <td>${e.created_at ? ago(e.created_at) : '—'}</td>
-        <td><code>${escapeHtml(e.added_by || '—')}</code></td>
-        <td class="row-actions">${e.root
-          ? '<span class="muted tiny">owner</span>'
-          : `<button class="btn danger tiny" data-wl="${escapeHtml(e.ip)}">Remove</button>`}</td>
+        <td><code>${esc(e.added_by || '—')}</code></td>
+        <td><div class="acts">${e.root
+          ? '<span class="fine">owner</span>'
+          : `<button class="btn quiet-danger xs" data-wl="${esc(e.ip)}">Remove</button>`}</div></td>
       </tr>`).join('');
 
-    $$('[data-wl]', body).forEach((b) => b.onclick = async () => {
+    $$('[data-wl]').forEach((b) => b.onclick = async () => {
       try {
         await api(`/whitelist/${encodeURIComponent(b.dataset.wl)}`, { method: 'DELETE' });
         toast('Address removed');
-        refreshWhitelist();
+        loadWhitelist();
       } catch (err) { toast(err.message, 'err'); }
     });
   } catch (err) {
@@ -546,18 +538,16 @@ async function refreshWhitelist() {
   }
 }
 
-/* ── docs ──────────────────────────────────────────────── */
+/* ── docs ────────────────────────────────────────────────── */
 
-function baseUrl() { return `${location.origin}/v1`; }
+const base = () => `${location.origin}/v1`;
 
 function paintDocs() {
-  $('#doc-base').textContent = baseUrl();
+  $('#doc-base').textContent = base();
   $('#doc-models').innerHTML = state.models.map((m) => `
-    <tr>
-      <td><code>${m.id}</code></td>
-      <td class="num">${money(m.cost * state.rate)}</td>
-      <td class="muted">${escapeHtml(m.description || '—')}</td>
-    </tr>`).join('');
+    <tr><td><code>${m.id}</code></td>
+        <td class="r">${money(m.cost * state.rate)}</td>
+        <td class="dim">${esc(m.description || '—')}</td></tr>`).join('');
   paintDocsKeys();
   paintExample();
 }
@@ -565,18 +555,18 @@ function paintDocs() {
 function paintDocsKeys() {
   const select = $('#docs-key');
   if (!select) return;
-  const previous = select.value;
-  const active = state.keys.filter((k) => !k.revoked);
+  const prev = select.value;
   select.innerHTML = '<option value="">— your key —</option>' +
-    active.map((k) => `<option value="${k.prefix}…">${k.prefix}… ${escapeHtml(k.name || '')}</option>`).join('');
-  select.value = previous;
+    state.keys.filter((k) => !k.revoked)
+      .map((k) => `<option value="${k.prefix}…">${k.prefix}… ${esc(k.name || '')}</option>`).join('');
+  select.value = prev;
   paintExample();
 }
 
 function paintExample() {
-  const lang = $('.tab.active')?.dataset.lang || 'curl';
+  const lang = $('.seg.active')?.dataset.lang || 'curl';
   const key = $('#docs-key')?.value || 'YOUR_KEY';
-  const url = baseUrl();
+  const url = base();
   const model = state.model || 'auto';
 
   const samples = {
@@ -587,7 +577,6 @@ function paintExample() {
     "model": "${model}",
     "messages": [{"role": "user", "content": "Hello"}]
   }'`,
-
     python: `from openai import OpenAI
 
 client = OpenAI(base_url="${url}", api_key="${key}")
@@ -597,7 +586,6 @@ response = client.chat.completions.create(
     messages=[{"role": "user", "content": "Hello"}],
 )
 print(response.choices[0].message.content)`,
-
     node: `import OpenAI from "openai";
 
 const client = new OpenAI({
@@ -611,51 +599,50 @@ const response = await client.chat.completions.create({
 });
 console.log(response.choices[0].message.content);`,
   };
-
   $('#doc-code').textContent = samples[lang];
 }
 
-/* ── settings ──────────────────────────────────────────── */
+/* ── settings ────────────────────────────────────────────── */
+
+const PLANS = { Free: 50, Pro: 1000, 'Pro+': 2000, 'Pro Max': 5000, Power: 10000 };
 
 async function loadSettings() {
   try {
-    const data = await api('/settings');
-    $('#key-state').textContent = data.kiro_api_key_set
-      ? `Currently set — ${data.kiro_api_key_masked}. Leave blank to keep it.`
-      : 'No key set. The CLI will fall back to a browser session if signed in.';
-    $('#trust-tools').value = data.trust_tools || '';
-    $('#rate').value = data.usd_per_credit;
-    $('#cli-path').textContent = data.cli;
-    $('#env-path').textContent = data.env_file;
-    $('#sel-state').innerHTML = data.model_selection
-      ? '<span class="tag ok">supported</span>'
-      : '<span class="tag bad">not supported by this CLI build</span>';
+    const d = await api('/settings');
+    $('#key-state').textContent = d.kiro_api_key_set
+      ? `Set — ${d.kiro_api_key_masked}. Leave blank to keep it.`
+      : 'Not set. The CLI falls back to a browser session if signed in.';
+    $('#trust-tools').value = d.trust_tools || '';
+    $('#rate').value = d.usd_per_credit;
+    $('#plan-credits').value = d.plan_credits;
+    $('#plan-name').value = Object.keys(PLANS).includes(d.plan_name) ? d.plan_name : 'Custom';
+    $('#cli-path').textContent = d.cli;
+    $('#env-path').textContent = d.env_file;
+    $('#sel-state').innerHTML = d.model_selection
+      ? '<span class="pill ok">supported</span>'
+      : '<span class="pill bad">not supported by this CLI build</span>';
     const select = $('#default-model');
-    if (select) select.value = data.default_model;
+    if (select) select.value = d.default_model;
   } catch (err) {
     if (err.message !== 'forbidden') toast(err.message, 'err');
   }
 }
 
-/* ── wiring ────────────────────────────────────────────── */
+/* ── wiring ──────────────────────────────────────────────── */
 
 function wire() {
-  $$('.nav-item').forEach((b) => b.onclick = () => go(b.dataset.view));
-  window.addEventListener('resize', positionGlow);
+  $$('.item').forEach((b) => b.onclick = () => go(b.dataset.view));
 
   // composer
   const input = $('#input');
   const grow = () => {
     input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 190) + 'px';
+    input.style.height = Math.min(input.scrollHeight, 184) + 'px';
   };
-  input.addEventListener('input', grow);
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      $('#composer').requestSubmit();
-    }
-  });
+  input.oninput = grow;
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#composer').requestSubmit(); }
+  };
   $('#composer').onsubmit = (e) => {
     e.preventDefault();
     const text = input.value;
@@ -663,64 +650,57 @@ function wire() {
     grow();
     send(text);
   };
-  $$('.chip').forEach((c) => c.onclick = () => send(c.textContent));
+  $$('.suggest').forEach((s) => s.onclick = () => send(s.textContent));
   $('#clear-chat').onclick = () => {
     state.messages = [];
     $('#thread').innerHTML = '';
     $('#turn-meta').textContent = '';
   };
 
-  // model picker
+  // picker
   $('#model-btn').onclick = (e) => {
     e.stopPropagation();
-    $('#model-pop').hidden ? openModelPop() : closeModelPop();
+    $('#model-pop').hidden ? openPop() : closePop();
   };
-  $('#model-search').oninput = (e) => paintModelList(e.target.value);
+  $('#model-search').oninput = (e) => paintOptions(e.target.value);
   $('#model-pop').onclick = (e) => e.stopPropagation();
-  document.addEventListener('click', closeModelPop);
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeModelPop();
-  });
+  document.addEventListener('click', closePop);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePop(); });
 
   // usage
-  $('#refresh-usage').onclick = refreshUsage;
-  $('#filter-model').onchange = refreshUsage;
-  $('#filter-ip').onchange = refreshUsage;
+  $('#refresh-usage').onclick = loadUsage;
+  $('#filter-model').onchange = loadUsage;
+  $('#filter-ip').onchange = loadUsage;
   $('#clear-usage').onclick = async () => {
     if (!confirm('Delete every logged request?')) return;
     await api('/usage', { method: 'DELETE' });
     toast('Usage log cleared');
-    refreshUsage();
+    loadUsage();
   };
   const live = $('#auto-refresh');
-  const setTimer = () => {
+  const arm = () => {
     clearInterval(state.timer);
-    if (live.checked) state.timer = setInterval(() => {
-      if (state.view === 'usage') refreshUsage();
-    }, 6000);
+    if (live.checked) {
+      state.timer = setInterval(() => { if (state.view === 'usage') loadUsage(); }, 6000);
+    }
   };
-  live.onchange = setTimer;
-  setTimer();
+  live.onchange = arm;
+  arm();
 
   // keys
   $('#new-key').onclick = async () => {
-    const name = prompt('Name this key (optional)') ?? '';
+    const name = prompt('Name this key (optional)');
+    if (name === null) return;
     const btn = $('#new-key');
-    btn.classList.add('loading');
+    btn.classList.add('busy');
     try {
-      const created = await api('/keys', {
-        method: 'POST',
-        body: JSON.stringify({ name }),
-      });
-      $('#fresh-key-value').textContent = created.key;
+      const made = await api('/keys', { method: 'POST', body: JSON.stringify({ name }) });
+      $('#fresh-key-value').textContent = made.key;
       $('#fresh-key').hidden = false;
       toast('Key generated');
-      refreshKeys();
-    } catch (err) {
-      toast(err.message, 'err');
-    } finally {
-      btn.classList.remove('loading');
-    }
+      loadKeys();
+    } catch (err) { toast(err.message, 'err'); }
+    finally { btn.classList.remove('busy'); }
   };
   $('#dismiss-key').onclick = () => { $('#fresh-key').hidden = true; };
 
@@ -734,30 +714,37 @@ function wire() {
       });
       $('#wl-ip').value = '';
       $('#wl-label').value = '';
-      toast('Address whitelisted');
-      refreshWhitelist();
+      toast('Address allowed');
+      loadWhitelist();
     } catch (err) { toast(err.message, 'err'); }
   };
 
   // docs
-  $$('.tab').forEach((t) => t.onclick = () => {
-    $$('.tab').forEach((x) => x.classList.toggle('active', x === t));
+  $$('.seg').forEach((t) => t.onclick = () => {
+    $$('.seg').forEach((x) => x.classList.toggle('active', x === t));
     paintExample();
   });
   $('#docs-key').onchange = paintExample;
 
   // settings
+  $('#plan-name').onchange = (e) => {
+    const preset = PLANS[e.target.value];
+    if (preset) $('#plan-credits').value = preset;
+  };
+
   $('#settings-form').onsubmit = async (e) => {
     e.preventDefault();
     const btn = $('button[type=submit]', e.target);
     const note = $('#save-note');
-    btn.classList.add('loading');
-    note.classList.remove('show', 'err');
+    btn.classList.add('busy');
+    note.classList.remove('on', 'bad');
 
     const payload = {
       default_model: $('#default-model').value,
       trust_tools: $('#trust-tools').value,
       usd_per_credit: parseFloat($('#rate').value || '0.04'),
+      plan_name: $('#plan-name').value,
+      plan_credits: parseFloat($('#plan-credits').value || '0'),
     };
     const key = $('#kiro-key').value.trim();
     if (key) payload.kiro_api_key = key;
@@ -766,38 +753,27 @@ function wire() {
       await api('/settings', { method: 'POST', body: JSON.stringify(payload) });
       $('#kiro-key').value = '';
       note.textContent = 'Saved';
-      note.classList.add('show');
-      await loadBootstrap();
+      note.classList.add('on');
+      await bootstrap();
       await loadSettings();
     } catch (err) {
       note.textContent = err.message;
-      note.classList.add('show', 'err');
+      note.classList.add('on', 'bad');
     } finally {
-      btn.classList.remove('loading');
+      btn.classList.remove('busy');
     }
   };
 
-  // reveal / copy
+  // reveal + copy
   $$('[data-reveal]').forEach((b) => b.onclick = () => {
-    const field = document.getElementById(b.dataset.reveal);
-    field.type = field.type === 'password' ? 'text' : 'password';
+    const f = document.getElementById(b.dataset.reveal);
+    f.type = f.type === 'password' ? 'text' : 'password';
   });
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-copy-el]');
-    if (!btn) return;
-    copyText(document.getElementById(btn.dataset.copyEl).textContent);
-  });
-
-  // ripple origin for buttons
-  document.addEventListener('pointerdown', (e) => {
-    const btn = e.target.closest('.btn');
-    if (!btn) return;
-    const box = btn.getBoundingClientRect();
-    btn.style.setProperty('--rx', `${((e.clientX - box.left) / box.width) * 100}%`);
-    btn.style.setProperty('--ry', `${((e.clientY - box.top) / box.height) * 100}%`);
+    if (btn) copy(document.getElementById(btn.dataset.copyEl).textContent);
   });
 }
 
 $('#retry').onclick = () => location.reload();
-
 boot();

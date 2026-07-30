@@ -7,6 +7,7 @@ worker thread so the event loop is never blocked on disk I/O.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import hashlib
 import os
 import secrets
@@ -151,6 +152,21 @@ def _stats_sync() -> Dict[str, Any]:
             (day_ago,),
         ).fetchone()
 
+        # Kiro allowances reset monthly, so the billing period is the current
+        # calendar month in UTC.
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        period_start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        next_month = (period_start + datetime.timedelta(days=32)).replace(day=1)
+
+        period = conn.execute(
+            """
+            SELECT COUNT(*) AS requests,
+                   COALESCE(SUM(credits), 0) AS credits
+            FROM usage WHERE ts >= ?
+            """,
+            (period_start.timestamp(),),
+        ).fetchone()
+
         by_model = conn.execute(
             """
             SELECT model,
@@ -198,6 +214,13 @@ def _stats_sync() -> Dict[str, Any]:
     return {
         "totals": dict(totals),
         "last_24h": dict(today),
+        "period": {
+            "requests": period["requests"],
+            "credits": round(period["credits"], 6),
+            "start": period_start.timestamp(),
+            "reset": next_month.timestamp(),
+            "label": period_start.strftime("%B %Y"),
+        },
         "by_model": [dict(r) for r in by_model],
         "by_ip": [dict(r) for r in by_ip],
         "series": series,
