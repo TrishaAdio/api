@@ -34,6 +34,46 @@ class Settings:
     # Model used when the request omits one / asks for an unknown id.
     default_model: str = field(default_factory=lambda: os.getenv("KIRO_DEFAULT_MODEL", "auto"))
 
+    # Web console ----------------------------------------------------------
+    brand: str = field(default_factory=lambda: os.getenv("BRAND", "RioApis"))
+    port: int = field(default_factory=lambda: int(os.getenv("PORT", "5000")))
+
+    # IPs allowed to administer the console. Written by setup.sh; these cannot
+    # be removed from the web UI. Additional IPs are managed in the database.
+    admin_ips: List[str] = field(default_factory=lambda: _env_list("ADMIN_WHITELIST_IPS"))
+
+    # Kiro charges per request, scaled by the model's credit multiplier.
+    # Pay-as-you-go overage is $0.04/credit.
+    # https://kiro.dev/blog/new-pricing-plans-and-auto/
+    usd_per_credit: float = field(default_factory=lambda: float(os.getenv("USD_PER_CREDIT", "0.04")))
+
+    # Usage log database.
+    usage_db_path: str = field(
+        default_factory=lambda: os.getenv(
+            "USAGE_DB_PATH", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "usage.db")
+        )
+    )
+
+    # Where .env lives, so the settings page can persist changes.
+    env_file: str = field(
+        default_factory=lambda: os.getenv(
+            "ENV_FILE", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+        )
+    )
+
+    enable_web_ui: bool = field(
+        default_factory=lambda: os.getenv("ENABLE_WEB_UI", "true").lower() not in ("0", "false", "no")
+    )
+
+    # Trust X-Forwarded-For for client IPs.
+    #
+    # Off by default and deliberately so: console access is decided by caller
+    # IP, and any client can set this header. Enabling it without a proxy that
+    # overwrites the header would let anyone claim a whitelisted address.
+    trust_proxy_headers: bool = field(
+        default_factory=lambda: os.getenv("TRUST_PROXY_HEADERS", "false").lower() in ("1", "true", "yes")
+    )
+
     request_timeout: float = field(default_factory=lambda: float(os.getenv("KIRO_TIMEOUT_SECONDS", "300")))
     max_concurrency: int = field(default_factory=lambda: int(os.getenv("KIRO_MAX_CONCURRENCY", "4")))
 
@@ -43,6 +83,10 @@ class Settings:
 
     # Bytes emitted per SSE chunk when streaming.
     stream_chunk_size: int = field(default_factory=lambda: int(os.getenv("KIRO_STREAM_CHUNK_SIZE", "24")))
+
+    def admin_ip_set(self) -> set:
+        """Root admin IPs. Loopback is always included so curl works locally."""
+        return set(self.admin_ips) | {"127.0.0.1", "::1", "localhost", "testclient"}
 
 
 settings = Settings()

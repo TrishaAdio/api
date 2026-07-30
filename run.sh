@@ -9,9 +9,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
-    BOLD=$'\033[1m'; CYAN=$'\033[36m'; GREY=$'\033[90m'; RED=$'\033[31m'; RESET=$'\033[0m'
+    BOLD=$'\033[1m'; DIM=$'\033[2m'; CYAN=$'\033[36m'
+    GREY=$'\033[90m'; RED=$'\033[31m'; RESET=$'\033[0m'
 else
-    BOLD=""; CYAN=""; GREY=""; RED=""; RESET=""
+    BOLD=""; DIM=""; CYAN=""; GREY=""; RED=""; RESET=""
 fi
 
 VENV_PY="$ROOT/.venv/bin/python"
@@ -44,10 +45,16 @@ if ! command -v "$RESOLVED_CLI" >/dev/null 2>&1 && [[ ! -x "$RESOLVED_CLI" ]]; t
     printf '          Re-run %s./setup.sh%s to detect it automatically.\n\n' "$BOLD" "$RESET"
 fi
 
-HOST="${HOST:-127.0.0.1}"
-PORT="${PORT:-8000}"
+HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-5000}"
 
-printf '\n  %sKiro OpenAI bridge%s  %s%s%s\n' "$BOLD" "$RESET" "$CYAN" "http://$HOST:$PORT/v1" "$RESET"
+# `|| true` matters: pipefail turns a failing `hostname -I` into a fatal error
+# under `set -e`, which would abort the script before uvicorn ever starts.
+SHOWN="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+[[ -n "$SHOWN" ]] || SHOWN="127.0.0.1"
+
+printf '\n  %sRioApis%s  %s%s%s\n' "$BOLD" "$RESET" "$CYAN" "http://$SHOWN:$PORT" "$RESET"
+printf '  %sapi%s      %s%s%s\n' "$GREY" "$RESET" "$DIM" "http://$SHOWN:$PORT/v1" "$RESET"
 printf '  %sctrl-c to stop%s\n\n' "$GREY" "$RESET"
 
 exec "$VENV_PY" -m uvicorn kiro_openai.server:app \

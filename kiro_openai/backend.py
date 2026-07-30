@@ -5,7 +5,7 @@ import json
 import os
 import re
 import shutil
-from typing import List, Optional, Sequence, Set
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from .config import settings
 
@@ -69,6 +69,8 @@ class KiroBackend:
         self._semaphore = asyncio.Semaphore(settings.max_concurrency)
         self._chat_flags: Set[str] = set()
         self._models: List[str] = []
+        self._model_costs: Dict[str, float] = {}
+        self._model_descriptions: Dict[str, str] = {}
         self._ready = False
 
     # ---------------------------------------------------------------- startup
@@ -120,15 +122,22 @@ class KiroBackend:
             cleaned = _clean(out)
             ids = _parse_model_ids(cleaned) or _parse_model_table(cleaned)
 
-        if not ids:
-            try:
-                code, out, _ = await self._exec(
-                    [settings.cli_bin, "chat", "--list-models"], timeout=60
-                )
-            except KiroError:
-                code, out = 1, ""
-            if code == 0:
-                ids = _parse_model_table(_clean(out))
+        # The text table is the only source of credit multipliers and
+        # descriptions, so read it regardless of whether JSON worked.
+        try:
+            t_code, t_out, _ = await self._exec(
+                [settings.cli_bin, "chat", "--list-models"], timeout=60
+            )
+        except KiroError:
+            t_code, t_out = 1, ""
+
+        if t_code == 0:
+            for model_id, cost, desc in _parse_model_rows(_clean(t_out)):
+                self._model_costs[model_id] = cost
+                if desc:
+                    self._model_descriptions[model_id] = desc
+                if model_id not in ids:
+                    ids.append(model_id)
 
         if not ids:
             return list(_FALLBACK_MODELS)
@@ -141,6 +150,22 @@ class KiroBackend:
 
     def models(self) -> List[str]:
         return list(self._models) if self._models else list(_FALLBACK_MODELS)
+
+    def model_cost(self, model_id: str) -> float:
+        """Credit multiplier the CLI publishes for this model, 0.0 if unknown."""
+        return self._model_costs.get(model_id, 0.0)
+
+    def model_catalog(self) -> List[Dict[str, object]]:
+        """Models with their credit multiplier and description, for the UI."""
+        return [
+            {
+                "id": model_id,
+                "cost": self._model_costs.get(model_id, 0.0),
+                "description": self._model_descriptions.get(model_id, ""),
+                "default": model_id == settings.default_model,
+            }
+            for model_id in self.models()
+        ]
 
     @property
     def supports_model_flag(self) -> bool:
@@ -278,30 +303,43 @@ class KiroBackend:
 
 
 _TABLE_ROW_RE = re.compile(
-    r"^\s*(?P<default>\*)?\s*(?P<id>[A-Za-z][\w.\-]*)\s+\d+(?:\.\d+)?x\s+credits\b"
+    r"^\s*(?P<default>\*)?\s*(?P<id>[A-Za-z][\w.\-]*)"
+    r"\s+(?P<cost>\d+(?:\.\d+)?)x\s+credits\s*(?P<desc>.*)$"
 )
 
 
-def _parse_model_table(raw: str) -> List[str]:
-    """Extract model ids from the CLI's human-readable --list-models table.
+def _parse_model_rows(raw: str) -> "List[Tuple[str, float, str]]":
+    """Parse the CLI's human-readable --list-models table.
 
         Available models (* = default):
 
         * auto              1.00x credits      Models chosen by task...
           claude-sonnet-5   1.30x credits      Claude Sonnet 5 model...
 
-    Requiring the 'Nx credits' column keeps the header and any trailing prose
-    from being mistaken for model ids.
+    Returns (id, credit multiplier, description). Requiring the 'Nx credits'
+    column keeps the header and trailing prose from being read as model ids.
     """
-    ids: List[str] = []
+    rows: List[Tuple[str, float, str]] = []
+    seen = set()
     for line in raw.splitlines():
         match = _TABLE_ROW_RE.match(line)
         if not match:
             continue
         model_id = match.group("id")
-        if model_id not in ids:
-            ids.append(model_id)
-    return ids
+        if model_id in seen:
+            continue
+        seen.add(model_id)
+        try:
+            cost = float(match.group("cost"))
+        except (TypeError, ValueError):
+            cost = 0.0
+        rows.append((model_id, cost, (match.group("desc") or "").strip()))
+    return rows
+
+
+def _parse_model_table(raw: str) -> List[str]:
+    """Model ids from the human-readable --list-models table."""
+    return [model_id for model_id, _cost, _desc in _parse_model_rows(raw)]
 
 
 def _parse_model_ids(raw: str) -> List[str]:

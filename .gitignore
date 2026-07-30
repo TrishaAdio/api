@@ -6,3 +6,6 @@ __pycache__/
 venv/
 *.log
 .DS_Store
+usage.db
+usage.db-wal
+usage.db-shm

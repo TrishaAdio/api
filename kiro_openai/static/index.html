@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>RioApis</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>◆</text></svg>">
+</head>
+<body>
+
+<div class="aurora" aria-hidden="true">
+  <span class="blob b1"></span>
+  <span class="blob b2"></span>
+  <span class="blob b3"></span>
+  <span class="grain"></span>
+</div>
+
+<!-- ── boot splash ───────────────────────────────────────── -->
+<section id="boot" class="gate">
+  <div class="boot-mark">◆</div>
+</section>
+
+<!-- ── IP denied ─────────────────────────────────────────── -->
+<section id="denied" class="gate" hidden>
+  <div class="gate-card">
+    <div class="gate-mark lock">⊘</div>
+    <h1>Not whitelisted</h1>
+    <p class="muted">This address cannot reach the RioApis console.</p>
+    <div class="ip-badge"><span class="muted tiny">your address</span><code id="denied-ip">—</code></div>
+    <p class="hint">
+      Add it on the server, then reload:<br>
+      <code>ADMIN_WHITELIST_IPS</code> in <code>.env</code>, or run <code>./setup.sh</code> again.
+    </p>
+    <button class="btn ghost block" id="retry">Retry</button>
+  </div>
+</section>
+
+<!-- ── console ───────────────────────────────────────────── -->
+<div id="app" class="shell" hidden>
+
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="mark">◆</span>
+      <div class="brand-text">
+        <strong>RioApis</strong>
+        <small id="brand-sub">OpenAI-compatible</small>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <button class="nav-item active" data-view="chat"><span class="ico">✳</span><span>Chat</span></button>
+      <button class="nav-item" data-view="usage"><span class="ico">◫</span><span>Usage</span></button>
+      <button class="nav-item" data-view="keys"><span class="ico">⚿</span><span>API keys</span></button>
+      <button class="nav-item" data-view="access"><span class="ico">⛨</span><span>Access</span></button>
+      <button class="nav-item" data-view="docs"><span class="ico">❯</span><span>Docs</span></button>
+      <button class="nav-item" data-view="settings"><span class="ico">⚙</span><span>Settings</span></button>
+      <span class="nav-glow" id="nav-glow"></span>
+    </nav>
+
+    <div class="side-foot">
+      <div class="status" id="status">
+        <span class="dot pending"></span>
+        <span id="status-text">connecting</span>
+      </div>
+      <div class="me">owner <code id="my-ip">—</code></div>
+    </div>
+  </aside>
+
+  <main class="main">
+
+    <!-- Chat -->
+    <section class="view active" data-view="chat">
+      <header class="topbar">
+        <div class="model-select">
+          <button class="model-btn" id="model-btn" aria-expanded="false">
+            <span class="model-dot"></span>
+            <span id="model-current">auto</span>
+            <span class="cost-pill" id="model-cost">$0.04</span>
+            <span class="caret">▾</span>
+          </button>
+          <div class="model-pop" id="model-pop" hidden>
+            <input type="text" id="model-search" placeholder="Search models…" spellcheck="false">
+            <div class="model-list" id="model-list"></div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <span class="turn-meta" id="turn-meta"></span>
+          <button class="btn ghost tiny" id="clear-chat">Clear</button>
+        </div>
+      </header>
+
+      <div class="thread" id="thread">
+        <div class="empty" id="empty-chat">
+          <div class="empty-mark">◆</div>
+          <h2>Ask anything</h2>
+          <p class="muted">Answers come from the Kiro CLI on this server.</p>
+          <div class="chips">
+            <button class="chip">Explain async/await in Python</button>
+            <button class="chip">Write a bash retry wrapper</button>
+            <button class="chip">Compare SQLite and Postgres for a log table</button>
+          </div>
+        </div>
+      </div>
+
+      <footer class="composer-wrap">
+        <form class="composer" id="composer">
+          <textarea id="input" rows="1" placeholder="Send a message…" spellcheck="false"></textarea>
+          <button class="send" id="send" type="submit" aria-label="Send">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 12h13M12 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </form>
+        <p class="composer-hint">Enter to send · Shift+Enter for a newline</p>
+      </footer>
+    </section>
+
+    <!-- Usage -->
+    <section class="view" data-view="usage">
+      <header class="topbar">
+        <h1 class="view-title">Usage</h1>
+        <div class="topbar-actions">
+          <label class="switch">
+            <input type="checkbox" id="auto-refresh" checked>
+            <span class="track"><span class="knob"></span></span>
+            <span class="switch-label">Live</span>
+          </label>
+          <button class="btn ghost tiny" id="refresh-usage">Refresh</button>
+          <button class="btn danger tiny" id="clear-usage">Clear log</button>
+        </div>
+      </header>
+
+      <div class="scroll">
+        <div class="stat-grid">
+          <div class="stat card"><span class="stat-key">Spend</span><strong class="stat-val" id="s-usd">$0.00</strong><span class="stat-sub" id="s-usd-24">—</span></div>
+          <div class="stat card"><span class="stat-key">Requests</span><strong class="stat-val" id="s-req">0</strong><span class="stat-sub" id="s-req-24">—</span></div>
+          <div class="stat card"><span class="stat-key">Tokens in</span><strong class="stat-val" id="s-tin">0</strong><span class="stat-sub">prompt</span></div>
+          <div class="stat card"><span class="stat-key">Tokens out</span><strong class="stat-val" id="s-tout">0</strong><span class="stat-sub">completion</span></div>
+          <div class="stat card"><span class="stat-key">Callers</span><strong class="stat-val" id="s-ips">0</strong><span class="stat-sub">unique IPs</span></div>
+          <div class="stat card"><span class="stat-key">Avg latency</span><strong class="stat-val" id="s-lat">0</strong><span class="stat-sub">ms</span></div>
+        </div>
+
+        <div class="card chart-card">
+          <div class="card-head">
+            <h2>Spend · last 24 hours</h2>
+            <span class="muted tiny" id="chart-peak"></span>
+          </div>
+          <div class="chart" id="chart"></div>
+        </div>
+
+        <div class="split">
+          <div class="card">
+            <div class="card-head"><h2>By model</h2></div>
+            <div class="bars" id="by-model"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>By IP</h2></div>
+            <div class="bars" id="by-ip"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Requests</h2>
+            <div class="filters">
+              <select id="filter-model"><option value="">All models</option></select>
+              <select id="filter-ip"><option value="">All IPs</option></select>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="log">
+              <thead><tr>
+                <th>When</th><th>IP</th><th>Model</th>
+                <th class="num">In</th><th class="num">Out</th>
+                <th class="num">Cost</th><th class="num">Latency</th>
+                <th>Source</th><th>Status</th>
+              </tr></thead>
+              <tbody id="log-body"></tbody>
+            </table>
+            <div class="empty small" id="log-empty" hidden><p class="muted">No requests logged yet.</p></div>
+          </div>
+        </div>
+        <p class="footnote" id="rate-note">—</p>
+      </div>
+    </section>
+
+    <!-- API keys -->
+    <section class="view" data-view="keys">
+      <header class="topbar">
+        <h1 class="view-title">API keys</h1>
+        <button class="btn primary tiny" id="new-key"><span class="btn-label">Generate key</span></button>
+      </header>
+
+      <div class="scroll">
+        <div class="card reveal-card" id="fresh-key" hidden>
+          <div class="card-head"><h2>New key</h2></div>
+          <div class="fresh">
+            <p class="muted tiny">Copy it now. Only a hash is stored, so it cannot be shown again.</p>
+            <div class="copyable big">
+              <code id="fresh-key-value">—</code>
+              <button class="btn primary tiny copy" data-copy-el="fresh-key-value">Copy</button>
+            </div>
+            <button class="btn ghost tiny" id="dismiss-key">Done</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Keys</h2>
+            <span class="muted tiny">usable from any IP</span>
+          </div>
+          <div class="table-wrap">
+            <table class="log">
+              <thead><tr>
+                <th>Key</th><th>Name</th><th>Created</th>
+                <th>Last used</th><th>Last IP</th>
+                <th class="num">Requests</th><th class="num">Cost</th>
+                <th>State</th><th></th>
+              </tr></thead>
+              <tbody id="keys-body"></tbody>
+            </table>
+            <div class="empty small" id="keys-empty" hidden>
+              <p class="muted">No keys yet. Generate one to call the API.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Access -->
+    <section class="view" data-view="access">
+      <header class="topbar"><h1 class="view-title">Console access</h1></header>
+
+      <div class="scroll">
+        <div class="card">
+          <div class="card-head"><h2>Add an address</h2></div>
+          <form class="inline-form" id="wl-form">
+            <input id="wl-ip" type="text" placeholder="203.0.113.9" spellcheck="false">
+            <input id="wl-label" type="text" placeholder="Label (optional)" spellcheck="false">
+            <button class="btn primary" type="submit"><span class="btn-label">Add</span></button>
+          </form>
+          <p class="hint">Only whitelisted addresses can open this console. API keys are unaffected and work from anywhere.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Whitelist</h2></div>
+          <div class="table-wrap">
+            <table class="log">
+              <thead><tr><th>Address</th><th>Label</th><th>Added</th><th>By</th><th></th></tr></thead>
+              <tbody id="wl-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Docs -->
+    <section class="view" data-view="docs">
+      <header class="topbar">
+        <h1 class="view-title">API docs</h1>
+        <select id="docs-key" class="docs-key"><option value="">— your key —</option></select>
+      </header>
+
+      <div class="scroll">
+        <div class="card">
+          <div class="card-head"><h2>Endpoint</h2></div>
+          <dl class="kv">
+            <dt>Base URL</dt>
+            <dd class="copyable"><code id="doc-base">—</code><button class="btn ghost tiny copy" data-copy-el="doc-base">Copy</button></dd>
+            <dt>Auth</dt><dd><code>Authorization: Bearer &lt;key&gt;</code></dd>
+            <dt>Compatible with</dt><dd>OpenAI Chat Completions</dd>
+          </dl>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Routes</h2></div>
+          <div class="table-wrap">
+            <table class="log">
+              <thead><tr><th>Method</th><th>Path</th><th>Notes</th></tr></thead>
+              <tbody>
+                <tr><td><span class="tag web">POST</span></td><td><code>/v1/chat/completions</code></td><td>Streaming and non-streaming</td></tr>
+                <tr><td><span class="tag ok">GET</span></td><td><code>/v1/models</code></td><td>Models available to your account</td></tr>
+                <tr><td><span class="tag ok">GET</span></td><td><code>/v1/models/{id}</code></td><td>Single model</td></tr>
+                <tr><td><span class="tag ok">GET</span></td><td><code>/healthz</code></td><td>No auth</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Examples</h2>
+            <div class="tabs" id="doc-tabs">
+              <button class="tab active" data-lang="curl">curl</button>
+              <button class="tab" data-lang="python">Python</button>
+              <button class="tab" data-lang="node">Node</button>
+            </div>
+          </div>
+          <div class="code-block">
+            <button class="btn ghost tiny copy floating" data-copy-el="doc-code">Copy</button>
+            <pre><code id="doc-code">—</code></pre>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Models</h2></div>
+          <div class="table-wrap">
+            <table class="log">
+              <thead><tr><th>Model</th><th class="num">Cost / request</th><th>Description</th></tr></thead>
+              <tbody id="doc-models"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Notes</h2></div>
+          <ul class="notes">
+            <li>Naming a model uses that model exactly. An unknown id returns <code>404</code> rather than silently substituting another.</li>
+            <li>Omitting <code>model</code> uses the configured default.</li>
+            <li><code>temperature</code>, <code>top_p</code>, <code>max_tokens</code> and <code>stop</code> are accepted for compatibility but ignored — the Kiro CLI exposes no equivalents.</li>
+            <li>Streaming is correct SSE, but the answer is produced whole and then replayed, so time-to-first-token is not improved.</li>
+            <li>Token counts are estimates; the CLI reports no usage data.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section class="view" data-view="settings">
+      <header class="topbar"><h1 class="view-title">Settings</h1></header>
+
+      <div class="scroll">
+        <form class="card form" id="settings-form">
+          <div class="card-head"><h2>Kiro account</h2></div>
+
+          <label class="label" for="kiro-key">Kiro API key</label>
+          <div class="field">
+            <input id="kiro-key" type="password" placeholder="ksk_…" spellcheck="false" autocomplete="off">
+            <button type="button" class="reveal" data-reveal="kiro-key" aria-label="Show key">◔</button>
+          </div>
+          <p class="hint" id="key-state">—</p>
+
+          <label class="label" for="default-model">Default model</label>
+          <div class="field"><select id="default-model"></select></div>
+          <p class="hint">Used when a request omits <code>model</code>.</p>
+
+          <label class="label" for="trust-tools">Trusted tools</label>
+          <div class="field"><input id="trust-tools" type="text" placeholder="e.g. read,grep" spellcheck="false"></div>
+          <p class="hint">Empty means no tools are trusted, so it behaves as a plain chat model.</p>
+
+          <label class="label" for="rate">Price per credit (USD)</label>
+          <div class="field"><input id="rate" type="number" step="0.001" min="0" placeholder="0.04"></div>
+          <p class="hint">Kiro bills per request scaled by the model's credit weight. Pay-as-you-go overage is $0.04 per credit.</p>
+
+          <div class="form-actions">
+            <button class="btn primary" type="submit"><span class="btn-label">Save</span></button>
+            <span class="save-note" id="save-note"></span>
+          </div>
+        </form>
+
+        <div class="card">
+          <div class="card-head"><h2>Server</h2></div>
+          <dl class="kv">
+            <dt>Kiro CLI</dt><dd><code id="cli-path">—</code></dd>
+            <dt>Per-request model</dt><dd id="sel-state">—</dd>
+            <dt>Config file</dt><dd><code id="env-path">—</code></dd>
+            <dt>Your address</dt><dd><code id="set-ip">—</code></dd>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
