@@ -38,11 +38,11 @@ async def main():
         models = await client.models.list()
         ids = [m.id for m in models.data]
         print(ids)
-        check("SDK parsed model list", "claude-sonnet-4.5" in ids, ids)
+        check("SDK parsed model list", "claude-sonnet-4.6" in ids, ids)
 
         print("\n== client.chat.completions.create() ==")
         completion = await client.chat.completions.create(
-            model="claude-sonnet-4.5",
+            model="claude-sonnet-4.6",
             messages=[
                 {"role": "system", "content": "Be brief."},
                 {"role": "user", "content": "What is 2+2?"},
@@ -52,7 +52,7 @@ async def main():
         )
         print(completion.choices[0].message.content)
         check("SDK deserialised completion", completion.object == "chat.completion")
-        check("model echoed", completion.model == "claude-sonnet-4.5", completion.model)
+        check("model echoed", completion.model == "claude-sonnet-4.6", completion.model)
         check("content non-empty", bool(completion.choices[0].message.content))
         check("unsupported params accepted without error", True)
 

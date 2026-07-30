@@ -71,24 +71,23 @@ setup_glyphs() {
 # ---------------------------------------------------------------------- banner
 
 banner() {
+    printf '\n'
     if supports_unicode; then
-        printf '\n'
-        printf '%s  ██╗  ██╗██╗██████╗  ██████╗      █████╗ ██████╗ ██╗%s\n' "$C1" "$RESET"
-        printf '%s  ██║ ██╔╝██║██╔══██╗██╔═══██╗    ██╔══██╗██╔══██╗██║%s\n' "$C2" "$RESET"
-        printf '%s  █████╔╝ ██║██████╔╝██║   ██║    ███████║██████╔╝██║%s\n' "$C3" "$RESET"
-        printf '%s  ██╔═██╗ ██║██╔══██╗██║   ██║    ██╔══██║██╔═══╝ ██║%s\n' "$C4" "$RESET"
-        printf '%s  ██║  ██╗██║██║  ██║╚██████╔╝    ██║  ██║██║     ██║%s\n' "$C5" "$RESET"
-        printf '%s  ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝ ╚═════╝     ╚═╝  ╚═╝╚═╝     ╚═╝%s\n' "$C6" "$RESET"
+        printf '%s  ██████╗ ██╗ ██████╗  █████╗ ██████╗ ██╗███████╗%s\n' "$C1" "$RESET"
+        printf '%s  ██╔══██╗██║██╔═══██╗██╔══██╗██╔══██╗██║██╔════╝%s\n' "$C2" "$RESET"
+        printf '%s  ██████╔╝██║██║   ██║███████║██████╔╝██║███████╗%s\n' "$C3" "$RESET"
+        printf '%s  ██╔══██╗██║██║   ██║██╔══██║██╔═══╝ ██║╚════██║%s\n' "$C4" "$RESET"
+        printf '%s  ██║  ██║██║╚██████╔╝██║  ██║██║     ██║███████║%s\n' "$C5" "$RESET"
+        printf '%s  ╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝%s\n' "$C6" "$RESET"
     else
-        printf '\n'
-        printf '%s   _  _____ ____   ___     _    ____ ___%s\n' "$C1" "$RESET"
-        printf '%s  | |/ /_ _|  _ \\ / _ \\   / \\  |  _ \\_ _|%s\n' "$C2" "$RESET"
-        printf '%s  | . < | || |_) | | | | / _ \\ | |_) | |%s\n' "$C3" "$RESET"
-        printf '%s  | |\\ \\| ||  _ <| |_| |/ ___ \\|  __/| |%s\n' "$C4" "$RESET"
-        printf '%s  |_|\\_\\___|_| \\_\\\\___/_/   \\_\\_|  |___|%s\n' "$C5" "$RESET"
+        printf '%s   ____  _       _    ____  _%s\n' "$C1" "$RESET"
+        printf '%s  |  _ \\(_) ___ / \\  |  _ \\(_)___%s\n' "$C2" "$RESET"
+        printf '%s  | |_) | |/ _ \\ _ \\ | |_) | / __|%s\n' "$C3" "$RESET"
+        printf '%s  |  _ <| | (_) | | ||  __/| \\__ \\%s\n' "$C4" "$RESET"
+        printf '%s  |_| \\_\\_|\\___/_| |_|_|   |_|___/%s\n' "$C5" "$RESET"
     fi
     printf '\n'
-    printf '  %sOpenAI-compatible API%s %s%s%s %sbacked by the Kiro CLI%s\n' \
+    printf '  %sRioApis%s %s%s%s %sOpenAI-compatible API on the Kiro CLI%s\n' \
         "$BOLD" "$RESET" "$GREY" "$G_DOT" "$RESET" "$DIM" "$RESET"
     printf '\n'
 }
@@ -399,7 +398,40 @@ if [[ "$WRITE_ENV" == "1" ]]; then
     fi
 
     DEFAULT_MODEL="$(ask 'Default model' 'auto')"
-    PORT="$(ask 'Port' '8000')"
+    PORT="$(ask 'Port' '5000')"
+
+    # ── console access ───────────────────────────────────────────────
+    # The console is restricted by caller IP rather than a password, so the
+    # owner's address has to be captured here. It lands in .env, which the web
+    # UI cannot edit, so a mistake in the browser cannot lock everyone out.
+    DETECTED_IP=""
+    if [[ -n "${SSH_CLIENT:-}" ]]; then
+        DETECTED_IP="$(printf '%s' "$SSH_CLIENT" | awk '{print $1}')"
+    elif [[ -n "${SSH_CONNECTION:-}" ]]; then
+        DETECTED_IP="$(printf '%s' "$SSH_CONNECTION" | awk '{print $1}')"
+    fi
+
+    printf '\n'
+    info "Who administers the RioApis console?"
+    note "Only these addresses can open the web UI, generate API keys and read"
+    note "usage. Generated keys keep working from any address."
+    if [[ -n "$DETECTED_IP" ]]; then
+        note "Detected your SSH client address: $DETECTED_IP"
+    fi
+    printf '\n'
+
+    ADMIN_IPS="${ADMIN_WHITELIST_IPS:-}"
+    if [[ -z "$ADMIN_IPS" ]]; then
+        ADMIN_IPS="$(ask 'Owner IP (comma-separated for several)' "$DETECTED_IP")"
+    fi
+
+    if [[ -z "$ADMIN_IPS" ]]; then
+        warn "no owner IP set; the console will only open from localhost"
+        note "Add ADMIN_WHITELIST_IPS to .env later, or use an SSH tunnel:"
+        note "  ssh -L ${PORT}:127.0.0.1:${PORT} <user>@<host>"
+    else
+        ok "console restricted to $ADMIN_IPS $(printf '%s(plus localhost)%s' "$GREY" "$RESET")"
+    fi
 
     umask 077
     cat > "$ENV_FILE" <<EOF
@@ -417,6 +449,16 @@ BRIDGE_API_KEY=${BRIDGE_KEY}
 
 KIRO_DEFAULT_MODEL=${DEFAULT_MODEL}
 PORT=${PORT}
+HOST=0.0.0.0
+
+# Addresses allowed to open the RioApis console. Cannot be changed from the web
+# UI, so a mistake there can never lock you out. Localhost is always allowed.
+ADMIN_WHITELIST_IPS=${ADMIN_IPS}
+
+# Kiro charges per request scaled by the model's credit weight.
+# Pay-as-you-go overage is \$0.04 per credit.
+USD_PER_CREDIT=0.04
+
 KIRO_BRIDGE_WORKDIR=/tmp/kiro-bridge
 KIRO_TIMEOUT_SECONDS=300
 KIRO_MAX_CONCURRENCY=4
@@ -498,18 +540,21 @@ fi
 
 # ------------------------------------------------------------------- summary
 
-PORT="${PORT:-8000}"
+PORT="${PORT:-5000}"
+# `|| true` matters: pipefail makes a failing `hostname -I` fatal under `set -e`.
+PUBLIC_HOST="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+[[ -n "$PUBLIC_HOST" ]] || PUBLIC_HOST="127.0.0.1"
+
 printf '\n'
 printf '  %s%s%s Setup complete%s\n' "$GREEN" "$BOLD" "$G_OK" "$RESET"
 printf '\n'
 rule
 printf '  %sstart%s      %s./run.sh%s\n' "$GREY" "$RESET" "$BOLD" "$RESET"
-printf '  %sbase_url%s   %shttp://127.0.0.1:%s/v1%s\n' "$GREY" "$RESET" "$CYAN" "$PORT" "$RESET"
-printf '  %sapi_key%s    %s%s%s\n' "$GREY" "$RESET" "$CYAN" "${BRIDGE_API_KEY:-see .env}" "$RESET"
-printf '  %shealth%s     %scurl http://127.0.0.1:%s/healthz%s\n' "$GREY" "$RESET" "$DIM" "$PORT" "$RESET"
+printf '  %sconsole%s    %shttp://%s:%s%s\n' "$GREY" "$RESET" "$CYAN" "$PUBLIC_HOST" "$PORT" "$RESET"
+printf '  %sapi%s        %shttp://%s:%s/v1%s\n' "$GREY" "$RESET" "$CYAN" "$PUBLIC_HOST" "$PORT" "$RESET"
+printf '  %saccess%s     %s%s%s\n' "$GREY" "$RESET" "$DIM" "${ADMIN_WHITELIST_IPS:-localhost only}" "$RESET"
 rule
 printf '\n'
-printf '  %sfrom openai import OpenAI%s\n' "$DIM" "$RESET"
-printf '  %sclient = OpenAI(base_url="http://127.0.0.1:%s/v1", api_key="%s")%s\n' \
-    "$DIM" "$PORT" "${BRIDGE_API_KEY:-...}" "$RESET"
+printf '  Open the console, then %sAPI keys → Generate key%s to mint an\n' "$BOLD" "$RESET"
+printf '  OpenAI-compatible key. Keys work from any address.\n'
 printf '\n'

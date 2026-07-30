@@ -33,7 +33,7 @@ with TestClient(app) as client:
     print("\n== /healthz ==")
     print(json.dumps(health, indent=2))
     check("startup succeeded", health["error"] is None, health["error"])
-    check("models discovered from --list-models", "claude-sonnet-4.5" in health["models"], health["models"])
+    check("models discovered from --list-models", "claude-sonnet-4.6" in health["models"], health["models"])
 
     print("\n== auth ==")
     check("missing key -> 401", client.post("/v1/chat/completions", json={"messages": []}).status_code == 401)
@@ -72,11 +72,11 @@ with TestClient(app) as client:
 
     print("\n== model id normalisation ==")
     r = client.post("/v1/chat/completions", headers=AUTH, json={
-        "model": "kiro/claude-sonnet-4.5", "messages": [{"role": "user", "content": "hi"}]})
-    check("provider-prefixed id resolved", r.json()["model"] == "claude-sonnet-4.5", r.json()["model"])
+        "model": "kiro/claude-sonnet-4.6", "messages": [{"role": "user", "content": "hi"}]})
+    check("provider-prefixed id resolved", r.json()["model"] == "claude-sonnet-4.6", r.json()["model"])
     r = client.post("/v1/chat/completions", headers=AUTH, json={
         "model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]})
-    check("unknown id falls back to default", r.json()["model"] == "auto", r.json()["model"])
+    check("unknown id rejected, never substituted", r.status_code == 404, r.status_code)
 
     print("\n== system prompt + multi-turn + parts content ==")
     r = client.post("/v1/chat/completions", headers=AUTH, json={
@@ -128,6 +128,24 @@ with TestClient(app) as client:
     joined = "".join(p["choices"][0]["delta"].get("content", "") for p in parsed)
     check("reassembled stream is non-empty", "SAW_PLAIN" in joined, joined[:120])
     check("stream ids stable", len({p["id"] for p in parsed}) == 1)
+
+    print("\n== CLI '> ' answer marker ==")
+    r = client.post("/v1/chat/completions", headers=AUTH, json={
+        "model": "auto", "messages": [{"role": "user", "content": "marker"}]})
+    content = r.json()["choices"][0]["message"]["content"]
+    check("leading '> ' stripped", not content.startswith(">"), repr(content[:30]))
+    check("body preserved after stripping", content.startswith("MODEL="), repr(content[:30]))
+
+    print("\n== model selection is reported honestly ==")
+    check("healthz advertises model_selection",
+          client.get("/healthz").json()["model_selection"] is True)
+    r = client.post("/v1/chat/completions", headers=AUTH, json={
+        "model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]})
+    check("unknown model -> 404 not substitution", r.status_code == 404, r.status_code)
+    r = client.post("/v1/chat/completions", headers=AUTH, json={
+        "model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hi"}]})
+    check("honoured model reported in X-Kiro-Model",
+          r.headers.get("X-Kiro-Model") == "gpt-5.6-sol", dict(r.headers))
 
     print("\n== error propagation ==")
     check("empty messages -> 400",

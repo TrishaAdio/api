@@ -8,7 +8,10 @@ spinner noise on stdout.
 """
 import argparse
 import json
+import os
 import sys
+
+MODEL_HELP_LINE = "      --model <MODEL>           Model to use\n"
 
 CHAT_HELP = """\
 Usage: kiro-cli chat [OPTIONS] [INPUT]
@@ -18,7 +21,7 @@ Options:
       --trust-all-tools         Auto-approve all tool use
       --trust-tools=<TOOLS>     Auto-approve specific tool categories
       --agent <AGENT>           Agent config to use
-      --model <MODEL>           Model to use
+{model_line}\
       --effort <EFFORT>         Reasoning effort [low, medium, high, xhigh, max]
       --wrap <WRAP>             Line wrapping [always, never, auto]
       --list-models             List available models
@@ -26,11 +29,30 @@ Options:
   -h, --help                    Print help
 """
 
+
+def chat_help() -> str:
+    # FAKE_NO_MODEL_FLAG simulates a CLI build without per-request model choice.
+    line = "" if os.environ.get("FAKE_NO_MODEL_FLAG") else MODEL_HELP_LINE
+    return CHAT_HELP.format(model_line=line)
+
 MODELS = [
-    {"id": "auto", "name": "Auto"},
-    {"id": "claude-sonnet-4.5", "name": "Claude Sonnet 4.5"},
-    {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol"},
+    {"id": "auto", "cost": "1.00", "desc": "Models chosen by task for optimal usage"},
+    {"id": "claude-opus-5", "cost": "2.20", "desc": "Experimental preview of Claude Opus 5"},
+    {"id": "claude-sonnet-5", "cost": "1.30", "desc": "Claude Sonnet 5 model with 1M context window"},
+    {"id": "claude-sonnet-4.6", "cost": "1.30", "desc": "Claude Sonnet 4.6 model with 1M context window"},
+    {"id": "gpt-5.6-sol", "cost": "2.40", "desc": "Experimental preview of OpenAI GPT 5.6 Sol"},
+    {"id": "qwen3-coder-next", "cost": "0.05", "desc": "Experimental preview of Qwen3 Coder Next"},
 ]
+
+# Byte-for-byte layout of the real CLI's table, so the text parser is tested
+# against the format actually observed in the wild.
+def models_table() -> str:
+    lines = ["Available models (* = default):", ""]
+    for entry in MODELS:
+        marker = "*" if entry["id"] == "auto" else " "
+        lines.append("{0} {1:<20} {2}x credits      {3}".format(
+            marker, entry["id"], entry["cost"], entry["desc"]))
+    return "\n".join(lines) + "\n"
 
 
 def main() -> int:
@@ -41,7 +63,7 @@ def main() -> int:
     argv = argv[1:]
 
     if "--help" in argv or "-h" in argv:
-        sys.stdout.write(CHAT_HELP)
+        sys.stdout.write(chat_help())
         return 0
 
     parser = argparse.ArgumentParser(add_help=False)
@@ -58,10 +80,12 @@ def main() -> int:
     args = parser.parse_args(argv)
 
     if args.list_models:
-        if args.format == "json":
-            sys.stdout.write(json.dumps(MODELS))
+        # FAKE_NO_JSON_FORMAT reproduces builds that ignore --format and always
+        # print the human-readable table.
+        if args.format == "json" and not os.environ.get("FAKE_NO_JSON_FORMAT"):
+            sys.stdout.write(json.dumps([{"id": m["id"]} for m in MODELS]))
         else:
-            sys.stdout.write("\n".join(m["id"] for m in MODELS))
+            sys.stdout.write(models_table())
         return 0
 
     prompt = " ".join(args.prompt).strip()
@@ -77,6 +101,10 @@ def main() -> int:
     # bridge's cleanup logic strips it.
     sys.stdout.write("\u280b\r\u2819\r")
     sys.stdout.write("\x1b[38;5;13m")
+
+    # The real CLI prefixes its answer with "> "; reproduce it so the bridge's
+    # marker stripping is exercised.
+    sys.stdout.write("> ")
 
     sys.stdout.write("MODEL={0} EFFORT={1} WRAP={2} TRUST={3}\n".format(
         args.model, args.effort, args.wrap, args.trust_tools))

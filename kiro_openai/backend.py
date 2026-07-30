@@ -5,7 +5,7 @@ import json
 import os
 import re
 import shutil
-from typing import List, Optional, Sequence, Set
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from .config import settings
 
@@ -25,12 +25,33 @@ class KiroError(RuntimeError):
         self.exit_code = exit_code
 
 
+class ModelNotAvailable(KiroError):
+    """The requested model cannot serve the request.
+
+    Raised instead of quietly substituting a different model, so a client that
+    names a model always either gets that model or an explicit error.
+    """
+
+
 def _clean(raw: str) -> str:
     """Strip ANSI escapes and residual spinner-only lines from CLI output."""
     text = _ANSI_RE.sub("", raw)
     text = text.replace("\r", "\n")
     kept = [line for line in text.split("\n") if not (line.strip() and _SPINNER_RE.match(line))]
     return "\n".join(kept).strip()
+
+
+def _strip_response_marker(text: str) -> str:
+    """Remove the '> ' marker the CLI prints ahead of its answer.
+
+    Only the very start of the output is touched, so genuine markdown
+    blockquotes later in the response survive intact.
+    """
+    if text.startswith("> "):
+        return text[2:].lstrip("\n")
+    if text.startswith(">\n"):
+        return text[2:].lstrip("\n")
+    return text
 
 
 def _child_env() -> dict:
@@ -48,6 +69,8 @@ class KiroBackend:
         self._semaphore = asyncio.Semaphore(settings.max_concurrency)
         self._chat_flags: Set[str] = set()
         self._models: List[str] = []
+        self._model_costs: Dict[str, float] = {}
+        self._model_descriptions: Dict[str, str] = {}
         self._ready = False
 
     # ---------------------------------------------------------------- startup
@@ -80,36 +103,106 @@ class KiroBackend:
         return set(re.findall(r"--[a-z][a-z0-9-]+", _clean(out + "\n" + err)))
 
     async def _probe_models(self) -> List[str]:
+        """Discover model ids, preferring JSON but tolerating the text table.
+
+        `--format json` is not honoured on every build, and when it is not the
+        CLI prints its human-readable table instead. Parsing only JSON meant
+        model discovery silently collapsed to the fallback list.
+        """
+        ids: List[str] = []
+
         try:
             code, out, _ = await self._exec(
                 [settings.cli_bin, "chat", "--list-models", "--format", "json"], timeout=60
             )
         except KiroError:
-            return list(_FALLBACK_MODELS)
-        if code != 0:
+            code, out = 1, ""
+
+        if code == 0:
+            cleaned = _clean(out)
+            ids = _parse_model_ids(cleaned) or _parse_model_table(cleaned)
+
+        # The text table is the only source of credit multipliers and
+        # descriptions, so read it regardless of whether JSON worked.
+        try:
+            t_code, t_out, _ = await self._exec(
+                [settings.cli_bin, "chat", "--list-models"], timeout=60
+            )
+        except KiroError:
+            t_code, t_out = 1, ""
+
+        if t_code == 0:
+            for model_id, cost, desc in _parse_model_rows(_clean(t_out)):
+                self._model_costs[model_id] = cost
+                if desc:
+                    self._model_descriptions[model_id] = desc
+                if model_id not in ids:
+                    ids.append(model_id)
+
+        if not ids:
             return list(_FALLBACK_MODELS)
 
-        ids = _parse_model_ids(_clean(out))
         if settings.default_model not in ids:
             ids.insert(0, settings.default_model)
-        return ids or list(_FALLBACK_MODELS)
+        return ids
 
     # ----------------------------------------------------------------- public
 
     def models(self) -> List[str]:
         return list(self._models) if self._models else list(_FALLBACK_MODELS)
 
+    def model_cost(self, model_id: str) -> float:
+        """Credit multiplier the CLI publishes for this model, 0.0 if unknown."""
+        return self._model_costs.get(model_id, 0.0)
+
+    def model_catalog(self) -> List[Dict[str, object]]:
+        """Models with their credit multiplier and description, for the UI."""
+        return [
+            {
+                "id": model_id,
+                "cost": self._model_costs.get(model_id, 0.0),
+                "description": self._model_descriptions.get(model_id, ""),
+                "default": model_id == settings.default_model,
+            }
+            for model_id in self.models()
+        ]
+
+    @property
+    def supports_model_flag(self) -> bool:
+        """Whether this CLI build can select a model per invocation."""
+        return "--model" in self._chat_flags
+
     def resolve_model(self, requested: Optional[str]) -> str:
-        """Map a requested model id onto something this CLI actually offers."""
+        """Resolve the model that will serve this request.
+
+        A model named in the request is honoured exactly or the request is
+        rejected. Substituting a different model would let a client believe it
+        was talking to one model while another answered.
+        """
+        if not requested:
+            return settings.default_model
+
         available = self.models()
-        if requested and requested in available:
-            return requested
-        if requested:
-            # Tolerate provider-prefixed ids like "kiro/claude-sonnet-4.5".
-            tail = requested.split("/")[-1]
-            if tail in available:
-                return tail
-        return settings.default_model
+        candidate = requested
+        if candidate not in available:
+            # Tolerate provider-prefixed ids like "kiro/claude-sonnet-5".
+            candidate = requested.split("/")[-1]
+
+        if candidate not in available:
+            raise ModelNotAvailable(
+                "The model '{0}' does not exist. Available models: {1}".format(
+                    requested, ", ".join(available)
+                )
+            )
+
+        if not self.supports_model_flag and candidate != settings.default_model:
+            raise ModelNotAvailable(
+                "This kiro-cli build has no 'chat --model' flag, so '{0}' cannot be "
+                "selected per request. Either set KIRO_DEFAULT_MODEL={0} in .env and "
+                "restart, or run 'kiro-cli settings chat.defaultModel {0}'.".format(candidate)
+            )
+
+        return candidate
 
     async def complete(
         self,
@@ -130,7 +223,7 @@ class KiroBackend:
             raise KiroError("kiro-cli exited {0}: {1}".format(code, detail[:2000]), exit_code=code)
         if not body:
             raise KiroError("kiro-cli produced no output. stderr: {0}".format(_clean(err)[:2000]))
-        return body
+        return _strip_response_marker(body)
 
     # ---------------------------------------------------------------- internals
 
@@ -207,6 +300,46 @@ class KiroBackend:
             out.decode("utf-8", "replace"),
             err.decode("utf-8", "replace"),
         )
+
+
+_TABLE_ROW_RE = re.compile(
+    r"^\s*(?P<default>\*)?\s*(?P<id>[A-Za-z][\w.\-]*)"
+    r"\s+(?P<cost>\d+(?:\.\d+)?)x\s+credits\s*(?P<desc>.*)$"
+)
+
+
+def _parse_model_rows(raw: str) -> "List[Tuple[str, float, str]]":
+    """Parse the CLI's human-readable --list-models table.
+
+        Available models (* = default):
+
+        * auto              1.00x credits      Models chosen by task...
+          claude-sonnet-5   1.30x credits      Claude Sonnet 5 model...
+
+    Returns (id, credit multiplier, description). Requiring the 'Nx credits'
+    column keeps the header and trailing prose from being read as model ids.
+    """
+    rows: List[Tuple[str, float, str]] = []
+    seen = set()
+    for line in raw.splitlines():
+        match = _TABLE_ROW_RE.match(line)
+        if not match:
+            continue
+        model_id = match.group("id")
+        if model_id in seen:
+            continue
+        seen.add(model_id)
+        try:
+            cost = float(match.group("cost"))
+        except (TypeError, ValueError):
+            cost = 0.0
+        rows.append((model_id, cost, (match.group("desc") or "").strip()))
+    return rows
+
+
+def _parse_model_table(raw: str) -> List[str]:
+    """Model ids from the human-readable --list-models table."""
+    return [model_id for model_id, _cost, _desc in _parse_model_rows(raw)]
 
 
 def _parse_model_ids(raw: str) -> List[str]:
