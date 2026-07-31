@@ -25,6 +25,20 @@ class Settings:
     # Empty (the default) means no tools are trusted -> behaves like a plain LLM.
     trust_tools: List[str] = field(default_factory=lambda: _env_list("KIRO_TRUST_TOOLS"))
 
+    # How much of the machine the model may act on. Deliberately split by
+    # trust boundary, because the two surfaces are not equally exposed:
+    #
+    #   off      no tools. Answers text only.  (default)
+    #   console  full tools for the IP-whitelisted web console only.
+    #   all      full tools for generated API keys as well — and those work
+    #            from any address, so anyone holding a key gets shell access.
+    tool_access: str = field(
+        default_factory=lambda: os.getenv("TOOL_ACCESS", "off").strip().lower()
+    )
+
+    # Directory the agent is pointed at when tools are enabled.
+    tool_root: str = field(default_factory=lambda: os.getenv("TOOL_ROOT", "").strip())
+
     # Named agent config to run under (--agent). Optional.
     agent: Optional[str] = field(default_factory=lambda: os.getenv("KIRO_AGENT") or None)
 
@@ -108,6 +122,19 @@ class Settings:
     @property
     def use_acp(self) -> bool:
         return self.backend == "acp"
+
+    @property
+    def tools_for_console(self) -> bool:
+        return self.tool_access in ("console", "all")
+
+    @property
+    def tools_for_api(self) -> bool:
+        return self.tool_access == "all"
+
+    @property
+    def agent_cwd(self) -> str:
+        """Where the agent runs. tool_root overrides the scratch workdir."""
+        return self.tool_root or self.workdir
 
     def admin_ip_set(self) -> set:
         """Root admin IPs. Loopback is always included so curl works locally."""

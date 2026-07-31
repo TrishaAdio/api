@@ -17,6 +17,7 @@ Other switches:
 import json
 import os
 import sys
+import time
 
 DIALECT = os.environ.get("ACP_DIALECT", "spec")
 SPEC = DIALECT != "kiro"
@@ -105,6 +106,10 @@ def main():
                 # Wait for the client's answer before continuing.
                 reply = sys.stdin.readline()
                 sys.stderr.write("permission_reply={0}".format(reply))
+                log = os.environ.get("ACP_PERM_LOG")
+                if log:
+                    with open(log, "w") as fh:
+                        fh.write(reply)
 
             if not os.environ.get("ACP_NO_THOUGHT"):
                 for piece in THOUGHTS:
@@ -112,6 +117,8 @@ def main():
 
             for piece in ANSWER:
                 notify(session_id, "agent_message_chunk", "AgentMessageChunk", piece)
+                if os.environ.get("ACP_SLOW"):
+                    time.sleep(0.6)
 
             if os.environ.get("ACP_REFUSE"):
                 out({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "refusal"}})

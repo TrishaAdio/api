@@ -96,6 +96,8 @@ class SettingsPatch(BaseModel):
     plan_name: Optional[str] = None
     plan_credits: Optional[float] = None
     show_thinking: Optional[bool] = None
+    tool_access: Optional[str] = None
+    tool_root: Optional[str] = None
 
 
 class KeyCreate(BaseModel):
@@ -125,6 +127,8 @@ async def bootstrap(_ip: str = Depends(require_admin)):
         "default_model": settings.default_model,
         "model_selection": backend.supports_model_flag,
         "show_thinking": settings.show_thinking,
+        "tool_access": settings.tool_access,
+        "tool_root": settings.agent_cwd,
         "ready": backend.ready,
         "cli": settings.cli_bin,
         "port": settings.port,
@@ -258,6 +262,8 @@ async def read_settings(_ip: str = Depends(require_admin)):
         "plan_name": settings.plan_name,
         "plan_credits": settings.plan_credits,
         "show_thinking": settings.show_thinking,
+        "tool_access": settings.tool_access,
+        "tool_root": settings.agent_cwd,
         "cli": settings.cli_bin,
         "model_selection": backend.supports_model_flag,
         "env_file": settings.env_file,
@@ -307,6 +313,22 @@ async def write_settings(patch: SettingsPatch, _ip: str = Depends(require_admin)
         name = patch.plan_name.strip()[:40]
         updates["PLAN_NAME"] = name
         settings.plan_name = name
+
+    if patch.tool_access is not None:
+        level = patch.tool_access.strip().lower()
+        if level not in ("off", "console", "all"):
+            return JSONResponse(status_code=400,
+                                content={"error": "tool_access must be off, console or all."})
+        updates["TOOL_ACCESS"] = level
+        settings.tool_access = level
+
+    if patch.tool_root is not None:
+        root = patch.tool_root.strip()
+        if root and not os.path.isdir(root):
+            return JSONResponse(status_code=400,
+                                content={"error": "'{0}' is not a directory on this server.".format(root)})
+        updates["TOOL_ROOT"] = root
+        settings.tool_root = root
 
     if patch.show_thinking is not None:
         settings.show_thinking = bool(patch.show_thinking)
@@ -358,7 +380,8 @@ async def web_chat(body: WebChatRequest, request: Request, ip: str = Depends(req
             # Chunks are forwarded the moment they arrive, so reasoning appears
             # in the console while the model is still working.
             async for kind, piece in backend.stream_reply(
-                prompt, model=model, effort=body.effort
+                prompt, model=model, effort=body.effort,
+                allow_tools=settings.tools_for_console,
             ):
                 if kind == "thought":
                     yield _event({"type": "thinking_delta", "text": piece})
@@ -370,6 +393,16 @@ async def web_chat(body: WebChatRequest, request: Request, ip: str = Depends(req
                     for at in range(0, len(piece), step):
                         yield _event({"type": "delta", "text": piece[at : at + step]})
                         await asyncio.sleep(0)
+        except (asyncio.CancelledError, GeneratorExit):
+            # Stop pressed, or the tab closed. The task is already being torn
+            # down, so awaiting here would itself be cancelled and the row
+            # would never be written. Detach it onto the loop instead.
+            asyncio.get_event_loop().create_task(usage.record(
+                ip=ip, model=model, status=499, stream=True, source="web",
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                user_agent=agent, error="cancelled by client",
+            ))
+            raise
         except KiroError as exc:
             elapsed = int((time.perf_counter() - started) * 1000)
             await usage.record(ip=ip, model=model, latency_ms=elapsed, status=502,

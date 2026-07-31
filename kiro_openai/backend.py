@@ -250,6 +250,7 @@ class KiroBackend:
         prompt: str,
         model: Optional[str] = None,
         effort: Optional[str] = None,
+        allow_tools: bool = False,
     ):
         """Yield ("thought" | "text", chunk) as the model produces them.
 
@@ -262,7 +263,8 @@ class KiroBackend:
             try:
                 async with self._semaphore:
                     async for kind, chunk in acp.stream_turn(
-                        prompt, model=model, timeout=settings.request_timeout
+                        prompt, model=model, timeout=settings.request_timeout,
+                        allow_tools=allow_tools,
                     ):
                         emitted = True
                         yield (kind, chunk)
@@ -273,7 +275,8 @@ class KiroBackend:
                 if emitted or not settings.acp_fallback:
                     raise KiroError("ACP backend failed: {0}".format(exc))
 
-        text = await self.complete(prompt, model=model, effort=effort)
+        text = await self.complete(prompt, model=model, effort=effort,
+                                   allow_tools=allow_tools)
         thinking, answer = split_thinking(text)
         if thinking:
             yield ("thought", thinking)
@@ -284,8 +287,9 @@ class KiroBackend:
         prompt: str,
         model: Optional[str] = None,
         effort: Optional[str] = None,
+        allow_tools: bool = False,
     ) -> str:
-        argv, stdin_payload = self._build_invocation(prompt, model, effort)
+        argv, stdin_payload = self._build_invocation(prompt, model, effort, allow_tools)
 
         async with self._semaphore:
             code, out, err = await self._exec(
@@ -307,6 +311,7 @@ class KiroBackend:
         prompt: str,
         model: Optional[str],
         effort: Optional[str],
+        allow_tools: bool = False,
     ):
         argv: List[str] = [settings.cli_bin, "chat", "--no-interactive"]
 
@@ -325,7 +330,9 @@ class KiroBackend:
         if settings.agent and "--agent" in self._chat_flags:
             argv += ["--agent", settings.agent]
 
-        if settings.trust_tools and "--trust-tools" in self._chat_flags:
+        if allow_tools and "--trust-all-tools" in self._chat_flags:
+            argv.append("--trust-all-tools")
+        elif settings.trust_tools and "--trust-tools" in self._chat_flags:
             argv += ["--trust-tools={0}".format(",".join(settings.trust_tools))]
 
         stdin_payload: Optional[bytes] = None
@@ -353,7 +360,7 @@ class KiroBackend:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=settings.workdir if os.path.isdir(settings.workdir) else None,
+                cwd=settings.agent_cwd if os.path.isdir(settings.agent_cwd) else None,
                 env=_child_env(),
             )
         except FileNotFoundError as exc:

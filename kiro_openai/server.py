@@ -103,6 +103,7 @@ async def healthz():
         "cli": settings.cli_bin,
         "backend": settings.backend,
         "streaming": "live" if settings.use_acp else "replayed",
+        "tool_access": settings.tool_access,
         "models": backend.models(),
         "model_selection": backend.supports_model_flag,
         "default_model": settings.default_model,
@@ -169,7 +170,8 @@ async def chat_completions(
     try:
         collected = []
         async for kind, piece in backend.stream_reply(
-            prompt, model=model, effort=body.reasoning_effort
+            prompt, model=model, effort=body.reasoning_effort,
+            allow_tools=settings.tools_for_api,
         ):
             if kind == "text":
                 collected.append(piece)
@@ -258,7 +260,9 @@ async def _stream(
         # Forwarded as they arrive, so this is real streaming when the ACP
         # backend is active. Reasoning chunks are dropped: OpenAI's schema has
         # no field for them.
-        async for kind, piece in backend.stream_reply(prompt, model=model, effort=effort):
+        async for kind, piece in backend.stream_reply(
+            prompt, model=model, effort=effort, allow_tools=settings.tools_for_api
+        ):
             if kind != "text" or not piece:
                 continue
             parts.append(piece)

@@ -1512,3 +1512,44 @@ code, pre, .oid, .mid, .picker-btn, .key-select { font-feature-settings: normal;
 }
 
 .think-body { padding-top: 15px; }
+
+
+/* ═══ stop button ══════════════════════════════════════════ */
+
+.ship.halt { background: #2a1b22; color: #ff8a93; box-shadow: inset 0 0 0 1px #f4636f4d; }
+.ship.halt:hover { background: #3a2028; filter: none; }
+.ship.halt svg { width: 14px; height: 14px; }
+
+/* ═══ access warning ═══════════════════════════════════════ */
+
+.danger-note {
+  display: flex;
+  gap: 11px;
+  padding: 12px 14px;
+  border: 1px solid #f4636f3d;
+  border-radius: var(--r);
+  background: #f4636f0f;
+  color: #ffb3b9;
+  font-size: 12.5px;
+  line-height: 1.55;
+  animation: rise .28s var(--out) both;
+}
+.danger-note svg { width: 17px; height: 17px; color: var(--danger); margin-top: 1px; }
+.danger-note b { color: #ffd7da; font-weight: 600; }
+
+/* A standing reminder in the rail while the machine is reachable. */
+.armed {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid #f4636f3d;
+  border-radius: var(--r);
+  background: #f4636f12;
+  color: #ff9aa3;
+  font: 500 10.5px var(--display);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.armed svg { width: 13px; height: 13px; }
+.armed.console { border-color: #f5b5443d; background: #f5b54412; color: var(--warn); }

@@ -86,11 +86,13 @@ class AcpClient:
     avoids leaking session state between callers.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, allow_tools: bool = False) -> None:
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._next_id = 0
         self._session_id: Optional[str] = None
         self._stderr: List[str] = []
+        # Whether to approve the agent's requests to act on this machine.
+        self.allow_tools = allow_tools
 
     # ── process ──────────────────────────────────────────────────────────
 
@@ -109,11 +111,26 @@ class AcpClient:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=settings.workdir if os.path.isdir(settings.workdir) else None,
+                cwd=settings.agent_cwd if os.path.isdir(settings.agent_cwd) else None,
                 env=env,
             )
         except FileNotFoundError as exc:
             raise AcpError("cannot execute {0!r}: {1}".format(settings.cli_bin, exc))
+
+    async def cancel(self) -> None:
+        """Ask the agent to abandon the turn before we tear the process down.
+
+        Sent as a notification so it cannot block: if the agent has already
+        gone, closing the process is still enough.
+        """
+        if self._proc is None or self._proc.returncode is not None or not self._session_id:
+            return
+        try:
+            self._send({"jsonrpc": "2.0", "method": "session/cancel",
+                        "params": {"sessionId": self._session_id}})
+            await asyncio.wait_for(self._flush(), timeout=2)
+        except (AcpError, asyncio.TimeoutError, ConnectionResetError, BrokenPipeError):
+            pass
 
     async def close(self) -> None:
         if self._proc is None:
@@ -197,12 +214,15 @@ class AcpClient:
 
         if "requestpermission" in method:
             options = ((message.get("params") or {}).get("options") or [])
+            wanted = ("allow",) if self.allow_tools else ("reject", "deny")
+
             chosen = None
             for option in options:
                 blob = _norm(json.dumps(option))
-                if "reject" in blob or "deny" in blob or "no" == _norm(option.get("name")):
+                if any(token in blob for token in wanted):
                     chosen = option.get("optionId") or option.get("id")
                     break
+
             if chosen:
                 self._respond(request_id, {"outcome": {"outcome": "selected", "optionId": chosen}})
             else:
@@ -239,7 +259,7 @@ class AcpClient:
 
     async def _new_session(self, timeout: float) -> str:
         request_id = self._request("session/new", {
-            "cwd": settings.workdir,
+            "cwd": settings.agent_cwd,
             "mcpServers": [],
         })
         await self._flush()
@@ -351,16 +371,25 @@ async def stream_turn(
     prompt: str,
     model: Optional[str] = None,
     timeout: Optional[float] = None,
+    allow_tools: bool = False,
 ) -> AsyncIterator[Tuple[str, str]]:
     """Run one prompt through a fresh ACP process, streaming as it arrives."""
     limit = timeout or settings.request_timeout
-    client = AcpClient()
+    client = AcpClient(allow_tools=allow_tools)
     await client.start()
+    cancelled = False
     try:
         await client.handshake(timeout=min(limit, 60))
         if model:
             await client.set_model(model, timeout=min(limit, 30))
         async for item in client.stream(prompt, timeout=limit):
             yield item
+    except (asyncio.CancelledError, GeneratorExit):
+        # The reader hung up, e.g. Stop in the console. Tell the agent to stop
+        # working rather than leaving it running until the process dies.
+        cancelled = True
+        raise
     finally:
+        if cancelled:
+            await client.cancel()
         await client.close()

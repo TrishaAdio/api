@@ -186,11 +186,23 @@ async function bootstrap() {
     state.model = data.default_model || 'auto';
     status(data.ready ? 'ok' : 'bad', data.ready ? state.ip || 'localhost' : 'CLI unavailable');
     $('#logo-sub').textContent = data.model_selection ? 'OpenAI compatible' : 'fixed model';
+    paintAccess(data.tool_access);
     paintModels();
     paintDocs();
   } catch (err) {
     status('bad', 'error');
     if (err.message !== 'forbidden') toast(err.message, 'err');
+  }
+}
+
+/* A standing indicator whenever the model can touch the machine. */
+function paintAccess(level) {
+  const host = $('#armed');
+  if (!host) return;
+  host.hidden = level === 'off' || !level;
+  host.classList.toggle('console', level === 'console');
+  if (!host.hidden) {
+    $('#armed-text').textContent = level === 'all' ? 'machine access · api' : 'machine access';
   }
 }
 
@@ -296,7 +308,9 @@ async function send(text) {
   body.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
 
   state.busy = true;
-  $('#send').disabled = true;
+  state.abort = new AbortController();
+  $('#send').hidden = true;
+  $('#stop').hidden = false;
   $('#turn-meta').textContent = '';
 
   const turnEl = body.closest('.turn');
@@ -348,6 +362,7 @@ async function send(text) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: state.model, messages: state.messages }),
+      signal: state.abort.signal,
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -412,13 +427,37 @@ async function send(text) {
     }
     if (answer) state.messages.push({ role: 'assistant', content: answer });
   } catch (err) {
-    body.closest('.turn').remove();
-    const oops = document.createElement('div');
-    oops.className = 'oops';
-    oops.textContent = err.message;
-    $('#thread').append(oops);
+    cancelAnimationFrame(frame);
+    cancelAnimationFrame(thoughtFrame);
+
+    if (err.name === 'AbortError') {
+      // Keep whatever arrived and mark the turn as stopped, rather than
+      // discarding partial work.
+      if (answer) {
+        body.innerHTML = md(answer);
+        [...body.children].forEach((el) => el.classList.add('settled'));
+        const note = document.createElement('div');
+        note.className = 'tail';
+        note.innerHTML = '<span>stopped</span>';
+        body.append(note);
+        state.messages.push({ role: 'assistant', content: answer });
+      } else {
+        turnEl.remove();
+      }
+      if (thoughts && !collapsed) collapseThinking(turnEl);
+      $('#turn-meta').textContent = 'stopped';
+    } else {
+      turnEl.remove();
+      const oops = document.createElement('div');
+      oops.className = 'oops';
+      oops.textContent = err.message;
+      $('#thread').append(oops);
+    }
   } finally {
     state.busy = false;
+    state.abort = null;
+    $('#stop').hidden = true;
+    $('#send').hidden = false;
     $('#send').disabled = false;
     bottom();
   }
@@ -712,6 +751,17 @@ console.log(response.choices[0].message.content);`,
 
 const PLANS = { Free: 50, Pro: 1000, 'Pro+': 2000, 'Pro Max': 5000, Power: 10000 };
 
+const TOOL_NOTES = {
+  off: 'The model only answers. It cannot read, change or run anything.',
+  console: 'Full tool use for this console, which only whitelisted addresses can open.',
+  all: 'Full tool use for the console and for every API key.',
+};
+
+function paintToolNote(level) {
+  $('#tool-note').textContent = TOOL_NOTES[level] || '';
+  $('#tool-warn').hidden = level !== 'all';
+}
+
 async function loadSettings() {
   try {
     const d = await api('/settings');
@@ -722,6 +772,9 @@ async function loadSettings() {
     $('#rate').value = d.usd_per_credit;
     $('#plan-credits').value = d.plan_credits;
     $('#show-thinking').checked = !!d.show_thinking;
+    $('#tool-access').value = d.tool_access || 'off';
+    $('#tool-root').value = d.tool_root === d.env_file ? '' : (d.tool_root || '');
+    paintToolNote(d.tool_access || 'off');
     $('#plan-name').value = Object.keys(PLANS).includes(d.plan_name) ? d.plan_name : 'Custom';
     $('#cli-path').textContent = d.cli;
     $('#env-path').textContent = d.env_file;
@@ -756,6 +809,11 @@ function wire() {
     input.value = '';
     grow();
     send(text);
+  };
+  $('#stop').onclick = () => {
+    // Aborting the fetch drops the response body, which cancels the server's
+    // generator and tells the agent to stop working.
+    if (state.abort) state.abort.abort();
   };
   $$('.suggest').forEach((s) => s.onclick = () => send(s.textContent));
   $('#clear-chat').onclick = () => {
@@ -834,6 +892,8 @@ function wire() {
   $('#docs-key').onchange = paintExample;
 
   // settings
+  $('#tool-access').onchange = (e) => paintToolNote(e.target.value);
+
   $('#plan-name').onchange = (e) => {
     const preset = PLANS[e.target.value];
     if (preset) $('#plan-credits').value = preset;
@@ -853,6 +913,8 @@ function wire() {
       plan_name: $('#plan-name').value,
       plan_credits: parseFloat($('#plan-credits').value || '0'),
       show_thinking: $('#show-thinking').checked,
+      tool_access: $('#tool-access').value,
+      tool_root: $('#tool-root').value,
     };
     const key = $('#kiro-key').value.trim();
     if (key) payload.kiro_api_key = key;

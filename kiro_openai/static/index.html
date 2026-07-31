@@ -91,6 +91,9 @@
         </div>
         <div class="track"><i id="mini-fill"></i></div>
       </div>
+      <div class="armed" id="armed" hidden>
+        <svg><use href="#i-shield"/></svg><span id="armed-text">—</span>
+      </div>
       <div class="whoami">
         <span class="pip" id="pip"></span>
         <span id="status-text">connecting</span>
@@ -140,6 +143,9 @@
           <textarea id="input" rows="1" placeholder="Message RioApis…" spellcheck="false"></textarea>
           <button class="ship" id="send" type="submit" aria-label="Send">
             <svg viewBox="0 0 24 24"><path d="M4.5 12h13M11 5.5l6.5 6.5L11 18.5"/></svg>
+          </button>
+          <button class="ship halt" id="stop" type="button" hidden aria-label="Stop generating">
+            <svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none"/></svg>
           </button>
         </form>
         <p class="fine center">Enter sends · Shift+Enter for a new line</p>
@@ -419,6 +425,34 @@
               </label>
               <small>Streams the model's reasoning into chat, shown in a collapsed
                 panel. The API always returns only the answer.</small>
+            </div>
+          </div>
+
+          <div class="box-head divider"><h2>Machine access</h2></div>
+          <div class="fields">
+            <div class="fld">
+              <label for="tool-access">Let the model act on this server</label>
+              <select id="tool-access">
+                <option value="off">Off — answers text only</option>
+                <option value="console">Console only — read, write, delete, run commands</option>
+                <option value="all">Console and API keys — same, from any address</option>
+              </select>
+              <small id="tool-note">—</small>
+            </div>
+            <div class="fld">
+              <label for="tool-root">Working directory</label>
+              <input id="tool-root" type="text" placeholder="/home/ubuntu/project" spellcheck="false">
+              <small>Where the model runs. Leave blank to use a scratch directory.
+                A broad path such as <code>/</code> puts the whole filesystem in reach.</small>
+            </div>
+            <div class="danger-note" id="tool-warn" hidden>
+              <svg class="i"><use href="#i-shield"/></svg>
+              <div>
+                <b>API keys reach this server from any address.</b>
+                With this setting, anyone holding a key — including a leaked one — can
+                read, modify and delete files and run commands as the user running RioApis.
+                Prefer <b>Console only</b>, which is limited to whitelisted addresses.
+              </div>
             </div>
           </div>
 
