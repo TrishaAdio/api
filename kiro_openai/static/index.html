@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <title>RioApis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="/static/app.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%236c5cff'/><path d='M10 22V10h6a4 4 0 0 1 0 8h-2l4 4' stroke='white' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 </head>
@@ -123,7 +126,7 @@
       <div class="thread" id="thread">
         <div class="welcome" id="welcome">
           <h2>What can I help with?</h2>
-          <p class="sub">Answered by the Kiro CLI running on this server.</p>
+          <p class="sub">Answered on this server, streamed as it is written.</p>
           <div class="suggests">
             <button class="suggest">Explain Python's async/await</button>
             <button class="suggest">Write a bash retry wrapper</button>
@@ -370,7 +373,7 @@
           <ul class="bullets">
             <li>Naming a model uses that model exactly. An unknown id returns <code>404</code> rather than silently substituting another.</li>
             <li>Omitting <code>model</code> uses the configured default.</li>
-            <li><code>temperature</code>, <code>top_p</code>, <code>max_tokens</code> and <code>stop</code> are accepted for compatibility but ignored — the Kiro CLI exposes no equivalents.</li>
+            <li><code>temperature</code>, <code>top_p</code>, <code>max_tokens</code> and <code>stop</code> are accepted for compatibility but ignored — the engine exposes no equivalents.</li>
             <li>Streaming is valid SSE, but the answer is generated whole then replayed, so time-to-first-token is unchanged.</li>
             <li>Token counts are estimates; the CLI reports no usage data.</li>
           </ul>
@@ -384,10 +387,10 @@
 
       <div class="flow">
         <form class="box" id="settings-form">
-          <div class="box-head"><h2>Kiro account</h2></div>
+          <div class="box-head"><h2>Provider</h2></div>
           <div class="fields">
             <div class="fld">
-              <label for="kiro-key">Kiro API key</label>
+              <label for="kiro-key">Provider key</label>
               <div class="input-wrap">
                 <input id="kiro-key" type="password" placeholder="ksk_…" spellcheck="false" autocomplete="off">
                 <button type="button" class="peek" data-reveal="kiro-key" aria-label="Reveal"><svg class="i"><use href="#i-eye"/></svg></button>
@@ -414,8 +417,8 @@
                 <span class="rail-sm"><i></i></span>
                 <span>Show the model's thinking</span>
               </label>
-              <small>Sets <code>chat.showThinking</code> on the CLI. Shown collapsed in chat;
-                the API always returns only the answer.</small>
+              <small>Streams the model's reasoning into chat, shown in a collapsed
+                panel. The API always returns only the answer.</small>
             </div>
           </div>
 
@@ -441,7 +444,7 @@
             <div class="fld">
               <label for="rate">Price per credit (USD)</label>
               <input id="rate" type="number" step="0.001" min="0" placeholder="0.04">
-              <small>Kiro's pay-as-you-go overage is $0.04 per credit.</small>
+              <small>Pay-as-you-go overage is $0.04 per credit.</small>
             </div>
           </div>
 
@@ -454,7 +457,7 @@
         <div class="box">
           <div class="box-head"><h2>Server</h2></div>
           <dl class="facts">
-            <dt>Kiro CLI</dt><dd><code id="cli-path">—</code></dd>
+            <dt>Engine</dt><dd><code id="cli-path">—</code></dd>
             <dt>Per-request model</dt><dd id="sel-state">—</dd>
             <dt>Config file</dt><dd><code id="env-path">—</code></dd>
             <dt>Your address</dt><dd><code id="set-ip">—</code></dd>

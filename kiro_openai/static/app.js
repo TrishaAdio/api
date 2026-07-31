@@ -321,6 +321,15 @@ async function send(text) {
 
   // Re-parsing markdown on every 3-character delta would burn the main thread
   // on long answers, so repaint at most once per frame.
+  // Blocks that already finished must not re-animate on every repaint, or the
+  // whole answer flickers. Only the block still being written animates in.
+  let settled = 0;
+  const mark = (host) => {
+    const kids = [...host.children];
+    kids.forEach((el, i) => el.classList.add(i < settled ? 'settled' : 'rise'));
+    settled = Math.max(settled, kids.length - 1);
+  };
+
   const paint = () => {
     dirty = true;
     if (frame) return;
@@ -329,6 +338,7 @@ async function send(text) {
       if (!dirty) return;
       dirty = false;
       body.innerHTML = md(answer) + '<span class="caret"></span>';
+      mark(body);
       bottom();
     });
   };
@@ -383,7 +393,9 @@ async function send(text) {
           cancelAnimationFrame(frame);
           cancelAnimationFrame(thoughtFrame);
           if (thoughts && !collapsed) collapseThinking(turnEl);
+          settled = 0;
           body.innerHTML = md(answer);
+          [...body.children].forEach((el) => el.classList.add('settled'));
           const tail = document.createElement('div');
           tail.className = 'tail';
           tail.innerHTML = `
@@ -451,7 +463,7 @@ async function loadUsage() {
     $('#s-req-24').textContent = `${num(stats.last_24h.requests)} in 24h`;
     $('#rate-note').textContent =
       `Each call costs one credit-weighted request, priced at $${state.rate} per credit. ` +
-      `The Kiro CLI reports no billing data, so these are close estimates.`;
+      `The engine reports no billing data, so these are close estimates.`;
 
     paintGraph(stats.series || []);
     paintRanks('#by-model', (stats.by_model || []).map((r) =>

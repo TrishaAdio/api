@@ -31,9 +31,13 @@
   --out: cubic-bezier(.16, 1, .3, 1);
   --pop: cubic-bezier(.34, 1.5, .64, 1);
 
-  --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto,
+  /* Manrope for text, Space Grotesk for display, JetBrains Mono for code.
+     All fall back to the platform stack if the webfonts do not load. */
+  --ui: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
         "Helvetica Neue", Arial, sans-serif;
-  --code: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --display: "Space Grotesk", "Manrope", -apple-system, BlinkMacSystemFont,
+        "Segoe UI", Roboto, sans-serif;
+  --code: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
 * { box-sizing: border-box; min-width: 0; }
@@ -1191,13 +1195,32 @@ select option { background: #12141c; }
 .body li::marker { color: var(--ink-3); }
 .body ul ul, .body ol ol, .body ul ol, .body ol ul { margin: 5px 0 0; }
 
-.body li.task { list-style: none; display: flex; align-items: flex-start; gap: 8px; margin-left: -20px; }
+.body li.task { list-style: none; display: flex; align-items: flex-start; gap: 9px; margin-left: -20px; }
+
+/* Native checkboxes render as flat grey squares that clash with everything
+   else, so these are drawn to match the rest of the console. */
 .body li.task input {
-  width: 14px; height: 14px;
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 15px; height: 15px;
   margin: 4px 0 0;
-  accent-color: var(--accent);
   flex: none;
+  border: 1px solid var(--hair-2);
+  border-radius: 4px;
+  background: #0a0c11;
 }
+.body li.task input:checked { background: var(--accent); border-color: var(--accent); }
+.body li.task input:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px; top: 1px;
+  width: 4px; height: 8px;
+  border: solid #fff;
+  border-width: 0 1.7px 1.7px 0;
+  transform: rotate(45deg);
+}
+.body li.task input:checked + span { color: var(--ink-3); text-decoration: line-through; }
 
 .body blockquote {
   margin: 12px 0;
@@ -1348,3 +1371,144 @@ table.md td[style*="right"], table.md th[style*="right"] { font-variant-numeric:
   content: "…";
   animation: fade 1.1s ease-in-out infinite;
 }
+
+
+/* ═══ typography ═══════════════════════════════════════════
+   Space Grotesk carries headings, figures and the wordmark;
+   Manrope carries running text. Numerals are always tabular so
+   live-updating values do not shift width.
+   ═════════════════════════════════════════════════════════ */
+
+body { font-feature-settings: "cv11", "ss01"; letter-spacing: -.006em; }
+
+.logo-text b,
+.bar h1,
+.panel h1,
+.welcome h2,
+.budget-figure strong,
+.tile strong,
+.body h1, .body h2, .body h3, .body h4, .body h5, .body h6 {
+  font-family: var(--display);
+  font-feature-settings: "ss01", "ss03";
+}
+
+.logo-text b { font-weight: 700; letter-spacing: -.028em; }
+.bar h1 { font-weight: 600; letter-spacing: -.024em; }
+.welcome h2 { font-weight: 600; letter-spacing: -.032em; }
+.panel h1 { font-weight: 600; letter-spacing: -.026em; }
+
+.budget-figure strong,
+.tile strong { font-weight: 600; font-variant-numeric: tabular-nums lining-nums; }
+
+.eyebrow, .box-head h2, table.grid th {
+  font-family: var(--display);
+  font-weight: 500;
+}
+
+.body { font-family: var(--ui); }
+.body h1 { font-weight: 700; letter-spacing: -.028em; }
+.body h2, .body h3 { font-weight: 600; letter-spacing: -.022em; }
+
+/* Slightly wider tracking at small sizes keeps Manrope legible. */
+.fine, .tile em, .stat-sub, .whoami, .mini-top span { letter-spacing: 0; }
+
+code, pre, .oid, .mid, .picker-btn, .key-select { font-feature-settings: normal; }
+
+/* ═══ streaming text reveal ════════════════════════════════
+   The answer is re-rendered each frame, so only the block that
+   is still growing animates. Completed blocks are marked
+   settled and never re-animate, which avoids the whole answer
+   flickering on every tick.
+   ═════════════════════════════════════════════════════════ */
+
+.body > .rise {
+  animation: blockIn .38s cubic-bezier(.16, 1, .3, 1) both;
+}
+
+@keyframes blockIn {
+  from { opacity: 0; transform: translateY(6px); filter: blur(2px); }
+  to   { opacity: 1; transform: none; filter: none; }
+}
+
+.body > .settled { animation: none; opacity: 1; }
+
+/* The caret trails the text rather than blinking hard. */
+.caret {
+  border-radius: 1px;
+  animation: caretPulse 1.15s cubic-bezier(.4, 0, .6, 1) infinite;
+}
+
+@keyframes caretPulse {
+  0%, 100% { opacity: 1;  transform: scaleY(1); }
+  50%      { opacity: .25; transform: scaleY(.82); }
+}
+
+/* ═══ thinking: outlined panel ═════════════════════════════
+   A gradient ring drawn in the border box, so it reads as a
+   distinct frame rather than another card. It travels while
+   reasoning streams and rests once the answer begins.
+   ═════════════════════════════════════════════════════════ */
+
+.think-toggle {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background-image:
+    linear-gradient(var(--panel), var(--panel)),
+    linear-gradient(90deg, #6c5cff66, #4dd6f566, #6c5cff66);
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  background-size: 100% 100%, 220% 100%;
+  background-position: 0 0, 0 0;
+  font-family: var(--display);
+  font-weight: 500;
+  letter-spacing: -.01em;
+}
+
+.think.live .think-toggle {
+  background-image:
+    linear-gradient(var(--panel), var(--panel)),
+    linear-gradient(90deg, #6c5cff, #4dd6f5, #f57bd0, #6c5cff);
+  animation: ringTravel 2.6s linear infinite;
+}
+
+@keyframes ringTravel {
+  from { background-position: 0 0, 0% 0; }
+  to   { background-position: 0 0, 220% 0; }
+}
+
+.think-body {
+  position: relative;
+  border: 1px solid transparent;
+  border-left: 0;
+  border-radius: var(--r);
+  background-image:
+    linear-gradient(#0a0c11f2, #0a0c11f2),
+    linear-gradient(180deg, #6c5cff59, #4dd6f524 60%, transparent);
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  box-shadow: inset 2px 0 0 0 var(--accent);
+  padding-left: 16px;
+}
+
+.think.live .think-body {
+  background-image:
+    linear-gradient(#0a0c11f2, #0a0c11f2),
+    linear-gradient(180deg, #6c5cff8c, #4dd6f54d 70%, transparent);
+}
+
+/* A quiet label so the block is unmistakably reasoning, not output. */
+.think-body::before {
+  content: "reasoning";
+  position: absolute;
+  top: -7px; left: 14px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--ink-3);
+  font: 500 9.5px/1 var(--display);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+
+.think-body { padding-top: 15px; }
